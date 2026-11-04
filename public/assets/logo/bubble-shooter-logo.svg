@@ -1,0 +1,85 @@
+<svg width="512" height="256" viewBox="0 0 512 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Glossy bubble gradient for decorative bubbles -->
+    <radialGradient id="bubbleGloss" cx="35%" cy="25%" r="65%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.9" />
+      <stop offset="40%" style="stop-color:#ffffff;stop-opacity:0.3" />
+      <stop offset="70%" style="stop-color:#000000;stop-opacity:0.1" />
+      <stop offset="100%" style="stop-color:#000000;stop-opacity:0.25" />
+    </radialGradient>
+    
+    <!-- Title gradient -->
+    <linearGradient id="titleBlue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4FC8F5" />
+      <stop offset="50%" style="stop-color:#168BFF" />
+      <stop offset="100%" style="stop-color:#173A8A" />
+    </linearGradient>
+    
+    <linearGradient id="titlePurple" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#A855F7" />
+      <stop offset="50%" style="stop-color:#692BC2" />
+      <stop offset="100%" style="stop-color:#4C1D95" />
+    </linearGradient>
+    
+    <linearGradient id="goldAccent" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFE38A" />
+      <stop offset="100%" style="stop-color:#FFC928" />
+    </linearGradient>
+    
+    <!-- Shadow filter -->
+    <filter id="textShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.7"/>
+    </filter>
+  </defs>
+  
+  <!-- Decorative glossy bubbles around logo -->
+  <!-- Top left bubble -->
+  <circle cx="80" cy="80" r="28" fill="#FF454F"/>
+  <circle cx="80" cy="80" r="28" fill="url(#bubbleGloss)"/>
+  <circle cx="72" cy="72" r="8" fill="#ffffff" opacity="0.8"/>
+  
+  <!-- Top middle bubble -->
+  <circle cx="150" cy="60" r="32" fill="#FFC928"/>
+  <circle cx="150" cy="60" r="32" fill="url(#bubbleGloss)"/>
+  <circle cx="140" cy="48" r="10" fill="#ffffff" opacity="0.8"/>
+  
+  <!-- Top right bubble -->
+  <circle cx="432" cy="70" r="26" fill="#38D94A"/>
+  <circle cx="432" cy="70" r="26" fill="url(#bubbleGloss)"/>
+  <circle cx="425" cy="63" r="7" fill="#ffffff" opacity="0.8"/>
+  
+  <!-- Middle left bubble -->
+  <circle cx="60" cy="140" r="30" fill="#168BFF"/>
+  <circle cx="60" cy="140" r="30" fill="url(#bubbleGloss)"/>
+  <circle cx="50" cy="130" r="9" fill="#ffffff" opacity="0.8"/>
+  
+  <!-- Middle right bubble -->
+  <circle cx="452" cy="150" r="34" fill="#692BC2"/>
+  <circle cx="452" cy="150" r="34" fill="url(#bubbleGloss)"/>
+  <circle cx="440" cy="136" r="11" fill="#ffffff" opacity="0.8"/>
+  
+  <!-- Bottom bubbles -->
+  <circle cx="90" cy="190" r="24" fill="#FF9F1C"/>
+  <circle cx="90" cy="190" r="24" fill="url(#bubbleGloss)"/>
+  <circle cx="84" cy="184" r="6" fill="#ffffff" opacity="0.8"/>
+  
+  <circle cx="422" cy="185" r="28" fill="#9B5DE5"/>
+  <circle cx="422" cy="185" r="28" fill="url(#bubbleGloss)"/>
+  <circle cx="414" cy="177" r="8" fill="#ffffff" opacity="0.8"/>
+  
+  <!-- Main title "BUBBLE" -->
+  <text x="256" y="135" font-family="Arial Black, Trebuchet MS, Arial, sans-serif" 
+        font-size="68" font-weight="900" text-anchor="middle" 
+        fill="url(#titleBlue)" stroke="#0a1730" stroke-width="12" 
+        filter="url(#textShadow)">BUBBLE</text>
+  
+  <!-- Main title "SHOOTER" -->
+  <text x="256" y="195" font-family="Arial Black, Trebuchet MS, Arial, sans-serif" 
+        font-size="62" font-weight="900" text-anchor="middle" 
+        fill="url(#titlePurple)" stroke="#0a1730" stroke-width="12" 
+        filter="url(#textShadow)">SHOOTER</text>
+  
+  <!-- Gold accent star -->
+  <path d="M 256 35 L 262 50 L 278 50 L 266 60 L 272 75 L 256 65 L 240 75 L 246 60 L 234 50 L 250 50 Z" 
+        fill="url(#goldAccent)" stroke="#92400e" stroke-width="2" filter="url(#textShadow)"/>
+</svg>

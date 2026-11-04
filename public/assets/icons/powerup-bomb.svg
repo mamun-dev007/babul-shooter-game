@@ -1,0 +1,32 @@
+<svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bombBody" cx="35%" cy="25%" r="70%">
+      <stop offset="0%" style="stop-color:#757575" />
+      <stop offset="60%" style="stop-color:#424242" />
+      <stop offset="100%" style="stop-color:#212121" />
+    </radialGradient>
+    <linearGradient id="bombFuse" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#8D6E63" />
+      <stop offset="100%" style="stop-color:#6D4C41" />
+    </linearGradient>
+    <radialGradient id="spark" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#FFE38A" />
+      <stop offset="100%" style="stop-color:#FFC928;stop-opacity:0.7" />
+    </radialGradient>
+  </defs>
+  
+  <circle cx="28" cy="32" r="16" fill="url(#bombBody)" stroke="#000000" stroke-width="2"/>
+  <ellipse cx="22" cy="26" rx="6" ry="4" fill="#ffffff" opacity="0.3"/>
+  
+  <!-- Fuse -->
+  <path d="M 36 18 Q 42 12 46 8" stroke="url(#bombFuse)" stroke-width="4" fill="none" stroke-linecap="round"/>
+  
+  <!-- Spark -->
+  <circle cx="48" cy="6" r="4" fill="url(#spark)"/>
+  <circle cx="48" cy="6" r="2" fill="#ffffff"/>
+  
+  <!-- Bomb holes/vents -->
+  <circle cx="24" cy="30" r="2" fill="#000000" opacity="0.6"/>
+  <circle cx="32" cy="28" r="2" fill="#000000" opacity="0.6"/>
+  <circle cx="28" cy="36" r="2" fill="#000000" opacity="0.6"/>
+</svg>

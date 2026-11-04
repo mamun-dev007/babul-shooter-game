@@ -1,0 +1,30 @@
+{
+  "name": "bubble-shooter",
+  "description": "A portrait bubble shooter built with Phaser, TypeScript and Vite.",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite --config vite/config.dev.mjs",
+    "build": "vite build --config vite/config.prod.mjs",
+    "preview": "vite preview --config vite/config.prod.mjs",
+    "typecheck": "tsc --noEmit",
+    "validate:levels": "node scripts/validate-levels.mjs",
+    "test": "vitest run",
+    "cap:sync": "npm run build && npx cap sync",
+    "cap:android": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.0.0",
+    "phaser": "4.0.0",
+    "terser": "^5.39.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/cli": "^7.0.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.3.1",
+    "vitest": "^5.0.5"
+  }
+}

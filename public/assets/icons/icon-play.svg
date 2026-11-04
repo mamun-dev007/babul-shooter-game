@@ -1,0 +1,16 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="playGreen" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#6DFF9B" />
+      <stop offset="100%" style="stop-color:#38D94A" />
+    </linearGradient>
+    <radialGradient id="playGlow" cx="50%" cy="30%" r="60%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.5" />
+      <stop offset="100%" style="stop-color:#ffffff;stop-opacity:0" />
+    </radialGradient>
+  </defs>
+  
+  <circle cx="32" cy="32" r="28" fill="url(#playGreen)" stroke="#1a4d2e" stroke-width="3"/>
+  <ellipse cx="32" cy="24" rx="16" ry="10" fill="url(#playGlow)"/>
+  <polygon points="26,22 26,42 44,32" fill="#06210f" stroke="#06210f" stroke-width="1" stroke-linejoin="round"/>
+</svg>

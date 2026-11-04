@@ -1,0 +1,8 @@
+
+"compaction": {
+  "auto": true,
+  "keep": {
+    "tokens": 512
+  },
+  "buffer": 512
+}
