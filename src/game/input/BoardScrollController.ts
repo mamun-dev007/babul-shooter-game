@@ -3,8 +3,13 @@ import { boardViewBottomY, worldWidth } from '../layout';
 import type { GridSystem } from '../systems/GridSystem';
 
 /**
- * Natural drag scrolling for the bubble board (finger on mobile, mouse on
- * desktop). Only visible when the board is taller than the viewport: dragging
+ * Vertical drag scrolling for the bubble board, controlled by the scene's
+ * `canScroll` gate. With `canScroll: () => false` the controller is fully
+ * inert: dragging (press, move, wheel and inertia) never moves the board —
+ * the listeners stay registered only so wheel/pinch events keep being
+ * swallowed instead of re-acting elsewhere.
+ *
+ * When enabled, only vertical-dominant dragging shows as scroll: dragging
  * up/down moves the existing bubbles through `GridSystem.setScrollOffset`,
  * which never creates, removes or respawns a bubble.
  *
@@ -76,7 +81,11 @@ export class BoardScrollController {
         scene.input.on('wheel', this.handleWheel, this);
     }
 
-    /** Applies inertia glide; freezes instantly when gameplay seeks stillness. */
+    /**
+     * Applies inertia glide; freezes instantly when gameplay seeks stillness.
+     * With `canScroll: () => false` (fixed-board mode) this never runs and
+     * every scroll path on this controller is inert.
+     */
     update(deltaMs: number): void {
         if (this.isDragging) {
             return;
@@ -186,9 +195,24 @@ export class BoardScrollController {
         _deltaX: number,
         deltaY: number
     ): void {
+        // Wheel gestures must only ever move the board (position), never scale
+        // anything. Trackpad pinch arrives as a ctrl+wheel event: arriving here
+        // means the canvas has already eaten the gesture, so the board ignores
+        // it and the page is kept from zooming as well.
+        const native = pointer.event instanceof WheelEvent ? pointer.event : null;
+
+        if (native?.ctrlKey) {
+            native.preventDefault();
+            return;
+        }
+
         if (!this.inBoardBand(pointer) || !this.config.canScroll()) {
             return;
         }
+
+        // Keep the page (never scrollable, but zoomable on some browsers) from
+        // reacting to wheel motion over the board.
+        native?.preventDefault();
 
         this.config.grid.scrollBy(deltaY * 0.8);
         this.config.onScroll?.();

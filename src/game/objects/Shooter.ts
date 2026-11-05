@@ -7,6 +7,7 @@ import {
     bubbleTexture,
     type BubbleColorName,
 } from '../config';
+import { SHOOTER_TOP_CLEARANCE } from '../layout';
 
 const PREVIEW_SIZE = 27;
 const BARREL_TIP = 76;
@@ -43,9 +44,9 @@ export class Shooter extends GameObjects.Container {
         const barrel = scene.add.container(0, 0);
         const barrelGfx = scene.add.graphics();
         barrelGfx.fillStyle(0x247e54, 0.72);
-        barrelGfx.fillRoundedRect(-9, -78, 18, 80, 9);
+        barrelGfx.fillRoundedRect(-9, -SHOOTER_TOP_CLEARANCE, 18, 80, 9);
         barrelGfx.lineStyle(2, 0xcaffd9, 0.92);
-        barrelGfx.strokeRoundedRect(-9, -78, 18, 80, 9);
+        barrelGfx.strokeRoundedRect(-9, -SHOOTER_TOP_CLEARANCE, 18, 80, 9);
         barrelGfx.fillStyle(0x91f0a8, 0.48);
         barrelGfx.fillRoundedRect(-4, -72, 8, 66, 4);
         barrel.add(barrelGfx);

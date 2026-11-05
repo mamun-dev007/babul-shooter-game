@@ -153,22 +153,19 @@ export class GameScene extends Scene {
         // frontier sits at the viewport's vertical midpoint and the mass
         // extends upward, leaving the lower half clear for the shooter and
         // trajectory. Bubbles are born horizontally centered and never outside
-        // the playable area; nothing is generated later — scrolling only moves
-        // these existing bubbles.
+        // the playable area; nothing is generated later and the board keeps
+        // this fixed position — user input never moves it.
         this.grid.followBoard();
+        // The bubble formation is FIXED on every device: touch drag, swipe,
+        // mouse drag, mouse wheel and trackpad pan can never move the board.
+        // `canScroll: () => false` makes every scroll path on the controller
+        // inert — the grid is only repositioned by followBoard() between
+        // shots, never by user input. The controller stays registered because
+        // its wheel handling still swallows trackpad pinch zoom (ctrl+wheel),
+        // which must never scale the board or the page.
         this.boardScroll = new BoardScrollController(this, {
             grid: this.grid,
-            canScroll: () => !this.paused && !this.ended && this.activeBubble === null,
-            onScrollStart: () => {
-                this.aimController.cancelPointerInput();
-                this.aimGuide.hide();
-            },
-            onScroll: () => {
-                this.aimGuide.hide();
-                if (!this.ended && loadProgress().aimGuide !== false) {
-                    this.aimGuide.show();
-                }
-            },
+            canScroll: () => false,
         });
 
         this.shooter = new Shooter(this, GAME_WIDTH / 2, SHOOTER_Y);
@@ -195,10 +192,13 @@ export class GameScene extends Scene {
         this.refreshPowerUpCounts();
         this.syncShooterColors();
 
+        // The aim band follows the responsive layout: it spans exactly from
+        // the top Progress Bar's bottom edge (aimBandTopY) down to the
+        // launcher's topmost edge (aimBandBottomY), so touch and mouse aiming
+        // stay strictly inside that strip while the Progress Bar, HUD, launcher
+        // and bottom controls remain fixed and non-aimable.
         this.aimController = new AimController(this, {
             shooter: this.shooter,
-            minPointerY: 140,
-            maxPointerY: 740,
             canAim: () =>
                 !this.paused &&
                 !this.ended &&

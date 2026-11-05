@@ -1,4 +1,13 @@
-import { worldHeight, worldWidth } from '../game/layout';
+import {
+    CANVAS_TOP_ANCHOR,
+    PROGRESS_BAR_TOP_OFFSET,
+    PROGRESS_HEIGHT,
+    worldHeight,
+    worldWidth,
+} from '../game/layout';
+
+/** Re-exported for HUD consumers; the shared source of truth is game/layout. */
+export { CANVAS_TOP_ANCHOR, PROGRESS_HEIGHT };
 
 /**
  * Shared geometric anchors of the gameplay chrome (top HUD row + bottom
@@ -8,13 +17,10 @@ import { worldHeight, worldWidth } from '../game/layout';
  * equal the design-viewport constants at 540x960.
  */
 
-/** Vertical offset of the top HUD row (level + score) from the canvas top. */
-export const CANVAS_TOP_ANCHOR = 18;
 /** Gap from the canvas bottom edge to the toolbar's top. */
 export const CANVAS_BOTTOM_GAP = 82;
 export const TOOLBAR_HEIGHT = 72;
 export const PROGRESS_WIDTH = 316;
-export const PROGRESS_HEIGHT = 9;
 
 /** Level label anchor (left, top). */
 export const levelX = (): number => 20;
@@ -23,7 +29,7 @@ export const scoreX = (w = worldWidth()): number => w - 20;
 
 /** Progress bar: horizontally centred, fixed width. */
 export const progressX = (w = worldWidth()): number => w / 2 - PROGRESS_WIDTH / 2;
-export const progressY = (): number => CANVAS_TOP_ANCHOR + 18;
+export const progressY = (): number => CANVAS_TOP_ANCHOR + PROGRESS_BAR_TOP_OFFSET;
 
 /** SHOTS card sits just under the shooter, centred on the playfield. */
 export const shotsX = (w = worldWidth()): number => w / 2 - 85;

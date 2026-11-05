@@ -12,6 +12,7 @@ import {
 import {
     CANVAS_BOTTOM_GAP,
     CANVAS_TOP_ANCHOR,
+    PROGRESS_HEIGHT,
     PROGRESS_Y,
     SHOTS_Y,
     TOOLBAR_BUTTON_XS,
@@ -19,7 +20,7 @@ import {
     TOOLBAR_HEIGHT,
     TOOLBAR_Y,
 } from '../ui/hudAnchors';
-import { computeWorldSize } from './layout';
+import { computeWorldSize, aimBandBottomY, aimBandTopY, progressBarBottomY, SHOOTER_TOP_CLEARANCE } from './layout';
 
 /**
  * Responsive viewport contracts: the design viewport (GAME_WIDTH x
@@ -42,6 +43,20 @@ describe('responsive layout anchors', () => {
     it('keeps top HUD anchors tied to the single top anchor', () => {
         expect(PROGRESS_Y).toBe(CANVAS_TOP_ANCHOR + 18);
         expect(BOARD_VIEW_TOP).toBe(GRID_TOP);
+    });
+
+    it('bounds the aim band to the progress bar bottom and launcher top', () => {
+        // Top of the band: the Progress Bar's bottom edge — nothing above it
+        // (the HUD row, score and level labels) may accept aim input.
+        expect(aimBandTopY()).toBe(PROGRESS_Y + PROGRESS_HEIGHT);
+        expect(aimBandTopY()).toBe(progressBarBottomY());
+        // Bottom of the band: the launcher's topmost pixel. Everything below
+        // (loaded bubble seeks, SHOTS card, toolbar buttons) is non-aimable.
+        expect(aimBandBottomY()).toBe(SHOOTER_Y - SHOOTER_TOP_CLEARANCE);
+        // The band is a sane playable strip: it contains the board's visible
+        // interior and excludes the launcher body.
+        expect(aimBandBottomY()).toBeLessThan(SHOOTER_Y);
+        expect(aimBandTopY()).toBeLessThan(aimBandBottomY());
     });
 
     it('never lets bubbles, shooter and bottom controls overlap', () => {

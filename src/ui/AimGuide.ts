@@ -2,6 +2,7 @@ import { BUBBLE_DIAMETER, BUBBLE_RADIUS, bubbleTexture } from '../game/config';
 import type { Shooter } from '../game/objects/Shooter';
 import type { CollisionSystem } from '../game/systems/CollisionSystem';
 import type { Point } from '../game/systems/GridSystem';
+import { trajectoryPalette } from './trajectoryColors';
 
 const GUIDE_DEPTH = 5;
 const GHOST_DEPTH = 6;
@@ -82,22 +83,28 @@ export class AimGuide {
             return;
         }
 
+        // The dots are always drawn in the exact colour of the bubble that
+        // will launch: the palette is sampled from the loaded bubble's colour
+        // on every redraw. The show() cache keys on that colour, so a swap,
+        // shot or level change redraws with the new palette immediately.
+        const palette = trajectoryPalette(this.shooter.currentColor);
+
         for (let index = 0; index < points.length - 1; index += 2) {
             const point = points[index];
 
-            this.graphics.fillStyle(0x0b7f36, 0.22);
+            this.graphics.fillStyle(palette.halo, 0.22);
             this.graphics.fillCircle(point.x, point.y, 6);
-            this.graphics.fillStyle(0x17c94f, 0.98);
+            this.graphics.fillStyle(palette.dot, 0.98);
             this.graphics.fillCircle(point.x, point.y, 4);
-            this.graphics.fillStyle(0xd6ffe1, 0.78);
+            this.graphics.fillStyle(palette.highlight, 0.78);
             this.graphics.fillCircle(point.x - 0.8, point.y - 0.8, 1.2);
         }
 
         const impact = points[points.length - 1];
 
-        this.graphics.fillStyle(0x50e477, 0.12);
+        this.graphics.fillStyle(palette.impactFill, 0.12);
         this.graphics.fillCircle(impact.x, impact.y, BUBBLE_RADIUS - 2);
-        this.graphics.lineStyle(2, 0x31d761, 0.68);
+        this.graphics.lineStyle(2, palette.impactStroke, 0.68);
         this.graphics.strokeCircle(impact.x, impact.y, BUBBLE_RADIUS - 2);
 
         const texture = bubbleTexture(this.shooter.currentColor);

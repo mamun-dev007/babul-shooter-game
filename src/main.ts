@@ -30,6 +30,13 @@ const config: Phaser.Types.Core.GameConfig = {
         autoCenter: Scale.CENTER_BOTH,
         expandParent: true,
     },
+    input: {
+        // Two active pointers: the primary finger aims/fires while a second
+        // touch (multi-gesture) has its own pointer instead of hijacking the
+        // first one. With the default of 1 both fingers share a single pointer
+        // and releases can be misattributed mid-gesture.
+        activePointers: 2,
+    },
     render: {
         antialias: true,
         roundPixels: false,

@@ -36,8 +36,24 @@ const BASELINE_BOTTOM_OFFSETS = {
     shotsCard: 136,
     notice: 154,
     boardView: 170,
-    aimFloor: 220,
 } as const;
+
+/**
+ * Top HUD chrome metrics (shared source for the HUD and the aim band).
+ * Mirrored live in `ui/hudAnchors.ts`, which re-exports the constants for the
+ * HUD while deriving its own anchors from them.
+ */
+export const CANVAS_TOP_ANCHOR = 18;
+/** Gap from the top HUD row to the progress bar's top edge. */
+export const PROGRESS_BAR_TOP_OFFSET = 18;
+export const PROGRESS_HEIGHT = 9;
+
+/**
+ * Vertical clearance from the launcher's origin to its topmost pixel (the
+ * barrel's top edge, drawn as `-SHOOTER_TOP_CLEARANCE` in objects/Shooter).
+ * Here so the aim band stays pure layout math — no Phaser runtime imports.
+ */
+export const SHOOTER_TOP_CLEARANCE = 78;
 
 let currentWorld: WorldSize = { width: DESIGN_WIDTH, height: DESIGN_HEIGHT };
 
@@ -152,11 +168,15 @@ export const dangerLineY = (h = worldHeight()): number =>
 export const shooterAnchorY = (h = worldHeight()): number =>
     h - BASELINE_BOTTOM_OFFSETS.shooter;
 
-/** Highest pointer Y that still aims/fires (below the top HUD + board ceiling). */
-export const aimBandTopY = (): number => 140;
-/** Lowest pointer Y that may aim or fire (above the bottom controls). */
+/** Bottom edge of the top progress bar: the aim band's ceiling. */
+export const progressBarBottomY = (): number =>
+    CANVAS_TOP_ANCHOR + PROGRESS_BAR_TOP_OFFSET + PROGRESS_HEIGHT;
+
+/** Highest pointer Y that still aims/fires (below the top progress bar). */
+export const aimBandTopY = (): number => progressBarBottomY();
+/** Lowest pointer Y that may aim or fire (at the launcher's top edge). */
 export const aimBandBottomY = (h = worldHeight()): number =>
-    h - BASELINE_BOTTOM_OFFSETS.aimFloor;
+    shooterAnchorY(h) - SHOOTER_TOP_CLEARANCE;
 
 /* ------------------------------------------------------------------------- */
 /* HUD anchors live in `ui/hudAnchors.ts`; shared chrome anchors below.       */
