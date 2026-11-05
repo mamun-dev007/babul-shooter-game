@@ -1,34 +1,63 @@
-<svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg">
+<svg width="56" height="56" viewBox="0 0 56 56" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Color change bubble">
   <defs>
-    <radialGradient id="colorWheel1" cx="50%" cy="30%" r="60%">
-      <stop offset="0%" style="stop-color:#FF454F" />
-      <stop offset="100%" style="stop-color:#D32F2F" />
+    <clipPath id="bubbleClip">
+      <circle cx="24.5" cy="24.5" r="19"/>
+    </clipPath>
+    <!-- Base sphere: pink → violet → indigo, light from the top. -->
+    <linearGradient id="baseHue" x1="24%" y1="0%" x2="70%" y2="100%">
+      <stop offset="0%" stop-color="#E84FA3"/>
+      <stop offset="48%" stop-color="#8A4DE0"/>
+      <stop offset="100%" stop-color="#3D35B5"/>
+    </linearGradient>
+    <!-- Warm magenta bloom, upper-left -->
+    <radialGradient id="pinkBloom" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FF8FC7" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#FF8FC7" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="colorWheel2" cx="70%" cy="50%" r="60%">
-      <stop offset="0%" style="stop-color:#FFC928" />
-      <stop offset="100%" style="stop-color:#F57F17" />
+    <!-- Fresh green-yellow heart of the bubble -->
+    <radialGradient id="greenBloom" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#E4FF6E"/>
+      <stop offset="55%" stop-color="#7BD94A" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#7BD94A" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="colorWheel3" cx="50%" cy="70%" r="60%">
-      <stop offset="0%" style="stop-color:#38D94A" />
-      <stop offset="100%" style="stop-color:#2E7D32" />
+    <!-- Cool cyan-blue sweep, right/lower side -->
+    <radialGradient id="blueBloom" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3FA9F5" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#3FA9F5" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="colorWheel4" cx="30%" cy="50%" r="60%">
-      <stop offset="0%" style="stop-color:#4FC8F5" />
-      <stop offset="100%" style="stop-color:#0D47A1" />
+    <!-- Soft shade in the lower-right so the sphere reads as 3D. -->
+    <radialGradient id="bubbleShade" cx="80%" cy="84%" r="72%">
+      <stop offset="0%" stop-color="#2E1A6E" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#2E1A6E" stop-opacity="0"/>
     </radialGradient>
+    <!-- Reflective highlight band, fading out like glass. -->
+    <linearGradient id="specular" x1="18%" y1="10%" x2="62%" y2="52%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Plus badge: contrasting red disc with a bright white ring. -->
+    <linearGradient id="plusDisc" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#F2565B"/>
+      <stop offset="100%" stop-color="#C21D2B"/>
+    </linearGradient>
   </defs>
-  
-  <circle cx="28" cy="28" r="22" fill="#0B1730" stroke="#31507F" stroke-width="2"/>
-  
-  <!-- Color wheel segments -->
-  <path d="M 28 28 L 28 6 A 22 22 0 0 1 44.97 17 Z" fill="url(#colorWheel1)"/>
-  <path d="M 28 28 L 44.97 17 A 22 22 0 0 1 44.97 39 Z" fill="url(#colorWheel2)"/>
-  <path d="M 28 28 L 44.97 39 A 22 22 0 0 1 28 50 Z" fill="url(#colorWheel3)"/>
-  <path d="M 28 28 L 28 50 A 22 22 0 0 1 11.03 39 Z" fill="url(#colorWheel4)"/>
-  <path d="M 28 28 L 11.03 39 A 22 22 0 0 1 11.03 17 Z" fill="#692BC2"/>
-  <path d="M 28 28 L 11.03 17 A 22 22 0 0 1 28 6 Z" fill="#FF9F1C"/>
-  
-  <!-- Center circle -->
-  <circle cx="28" cy="28" r="8" fill="#0B1730" stroke="#4FC8F5" stroke-width="2"/>
-  <circle cx="28" cy="28" r="4" fill="#ffffff" opacity="0.8"/>
+
+  <!-- Main colourful glossy bubble -->
+  <g clip-path="url(#bubbleClip)">
+    <circle cx="24.5" cy="24.5" r="19" fill="url(#baseHue)"/>
+    <ellipse cx="15.5" cy="13" rx="10" ry="8.6" fill="url(#pinkBloom)"/>
+    <ellipse cx="27.5" cy="26" rx="13" ry="11" fill="url(#greenBloom)"/>
+    <ellipse cx="33.5" cy="33.5" rx="10.5" ry="9" fill="url(#blueBloom)"/>
+    <circle cx="24.5" cy="24.5" r="19" fill="url(#bubbleShade)"/>
+    <!-- Smooth reflective highlight -->
+    <ellipse cx="18.5" cy="14.8" rx="7.4" ry="5.2" fill="url(#specular)" transform="rotate(-32 18.5 14.8)"/>
+    <circle cx="13.2" cy="20.8" r="2.3" fill="#FFFFFF" opacity="0.85"/>
+  </g>
+  <!-- Rim light around the sphere edge -->
+  <circle cx="24.5" cy="24.5" r="18" fill="none" stroke="#FFFFFF" stroke-opacity="0.42" stroke-width="1.6"/>
+
+  <!-- Small circular Plus badge overlapping the bubble's bottom-right -->
+  <circle cx="41.5" cy="41.5" r="10" fill="url(#plusDisc)" stroke="#FFFFFF" stroke-width="2.4"/>
+  <rect x="36.6" y="40.05" width="9.8" height="2.9" rx="1.45" fill="#FFFFFF"/>
+  <rect x="40.05" y="36.6" width="2.9" height="9.8" rx="1.45" fill="#FFFFFF"/>
 </svg>

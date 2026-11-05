@@ -41,6 +41,12 @@ export interface MarchResult {
     distance: number;
     bounces: number;
     path: Point[];
+    /**
+     * Every bubble the swept path touched, in path order. In the default stop
+     * mode this is the single hit bubble; in pass-through mode it is the full
+     * chain of bubbles the ray runs through.
+     */
+    contacts: Cell[];
 }
 
 export interface MarchOptions {
@@ -49,6 +55,15 @@ export interface MarchOptions {
     maxBounces?: number;
     /** Moves with the scrollable board; defaults to the fixed ceiling. */
     ceilingY?: number;
+    /**
+     * When true the ray does not stop on bubble contact: each touched bubble
+     * is recorded in `contacts` and the march continues from its swept-tube
+     * exit point. Used to detect every bubble a trajectory passes toward
+     * without changing the stopped-shot behaviour.
+     */
+    passThroughBubbles?: boolean;
+    /** Hard cap on recorded contacts (pass-through mode). */
+    maxContacts?: number;
 }
 
 export interface SnapOptions {
@@ -263,6 +278,10 @@ export const marchBubble = (
     const sampleDistance = Math.max(0, options.sampleDistance ?? 0);
     const maxBounces = options.maxBounces ?? 32;
     const ceilingY = options.ceilingY ?? CEILING_Y;
+    const passThrough = options.passThroughBubbles ?? false;
+    const maxContacts = options.maxContacts ?? Number.POSITIVE_INFINITY;
+    const liveObstacles: Obstacle[] = [...obstacles];
+    const contacts: Cell[] = [];
     const path: Point[] = [{ x: origin.x, y: origin.y }];
 
     const pushPoint = (point: Point): void => {
@@ -283,6 +302,7 @@ export const marchBubble = (
             distance: 0,
             bounces: 0,
             path,
+            contacts,
         };
     }
 
@@ -315,7 +335,7 @@ export const marchBubble = (
             { x, y },
             { x: directionX, y: directionY },
             remaining,
-            obstacles
+            liveObstacles
         );
         const contactDistance = contact?.distance ?? Number.POSITIVE_INFINITY;
         const travel = Math.min(remaining, toCeiling, toWall, contactDistance);
@@ -343,15 +363,49 @@ export const marchBubble = (
             contactDistance <= toWall + EPSILON
         ) {
             pushPoint({ x, y });
+            contacts.push({ row: contact.cell.row, col: contact.cell.col });
 
-            return {
-                position: { x, y },
-                direction: { x: directionX, y: directionY },
-                hit: { kind: 'bubble', cell: contact.cell },
-                distance: travelled,
-                bounces,
-                path,
-            };
+            if (!passThrough) {
+                return {
+                    position: { x, y },
+                    direction: { x: directionX, y: directionY },
+                    hit: { kind: 'bubble', cell: contact.cell },
+                    distance: travelled,
+                    bounces,
+                    path,
+                    contacts,
+                };
+            }
+
+            if (contacts.length >= maxContacts) {
+                return {
+                    position: { x, y },
+                    direction: { x: directionX, y: directionY },
+                    hit: null,
+                    distance: travelled,
+                    bounces,
+                    path,
+                    contacts,
+                };
+            }
+
+            // Keep marching beyond the touched bubble: remove it from the
+            // live set and continue from the swept tube's exit point, which
+            // keeps later contacts on the exact extended ray.
+            const touchedIndex = liveObstacles.findIndex(
+                (obstacle) =>
+                    obstacle.cell.row === contact.cell.row &&
+                    obstacle.cell.col === contact.cell.col
+            );
+
+            if (touchedIndex >= 0) {
+                const touched = liveObstacles[touchedIndex];
+                liveObstacles.splice(touchedIndex, 1);
+                const projection =
+                    (touched.center.x - x) * directionX + (touched.center.y - y) * directionY;
+                x += directionX * 2 * projection;
+                y += directionY * 2 * projection;
+            }
         }
 
         // A ceiling hit wins a tie with the wall so a corner shot stops in the
@@ -367,6 +421,7 @@ export const marchBubble = (
                 distance: travelled,
                 bounces,
                 path,
+                contacts,
             };
         }
 
@@ -396,6 +451,7 @@ export const marchBubble = (
                     distance: travelled,
                     bounces,
                     path,
+                    contacts,
                 };
             }
         }
@@ -410,5 +466,6 @@ export const marchBubble = (
         distance: travelled,
         bounces,
         path,
+        contacts,
     };
 };

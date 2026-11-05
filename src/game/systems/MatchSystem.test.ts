@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { neighbourCells } from './geometry';
+import { neighbourCells, type Cell } from './geometry';
 import { MatchSystem } from './MatchSystem';
 import { GRID_COLS, type BubbleColorName } from '../config';
 
@@ -106,6 +106,10 @@ class FakeGrid {
         }
 
         return cluster;
+    }
+
+    neighbourCells(row: number, col: number): Cell[] {
+        return neighbourCells(row, col);
     }
 }
 
@@ -304,5 +308,60 @@ describe('MatchSystem ceiling connectivity', () => {
 
         expect(outcome.matched).toEqual([]);
         expect(outcome.score).toBe(0);
+    });
+});
+
+describe('predict (predicted destruction preview)', () => {
+    it('returns the bubbles a shot completing a trio would destroy', () => {
+        const grid = new FakeGrid([
+            { row: 0, col: 0, color: 'yellow' },
+            { row: 0, col: 1, color: 'yellow' },
+        ]);
+        const match = new MatchSystem(grid as never);
+
+        // A fired yellow bubble snapping at (0, 2) joins (0,1) + (0,0) into a
+        // valid ≥3 group: exactly those two board bubbles would be destroyed
+        // — the classic "aim at the yellow pair, both glow" scenario.
+        const destroyed = match.predict(0, 2, 'yellow');
+
+        expect(destroyed).toHaveLength(2);
+        expect(destroyed.every((bubble) => bubble.color === 'yellow')).toBe(true);
+        // Prediction must be mutation-free: the board is untouched.
+        expect(grid.bubbles).toHaveLength(2);
+    });
+
+    it('returns nothing when the shot cannot complete a group of three', () => {
+        const grid = new FakeGrid([{ row: 0, col: 0, color: 'red' }]);
+
+        const destroyed = new MatchSystem(grid as never).predict(0, 1, 'red');
+
+        expect(destroyed).toEqual([]);
+    });
+
+    it('walks the whole chain beyond the snap cell\'s direct neighbours', () => {
+        const grid = new FakeGrid([
+            { row: 0, col: 0, color: 'blue' },
+            { row: 0, col: 1, color: 'blue' },
+            { row: 0, col: 2, color: 'blue' },
+        ]);
+
+        const destroyed = new MatchSystem(grid as never).predict(0, 3, 'blue');
+
+        expect(destroyed).toHaveLength(3);
+    });
+
+    it('never highlights groups of another colour on the board', () => {
+        const grid = new FakeGrid([
+            { row: 0, col: 0, color: 'red' },
+            { row: 0, col: 1, color: 'blue' },
+            { row: 0, col: 2, color: 'blue' },
+        ]);
+
+        // The blue pair connects into a trio at (0,3), but the red bubble
+        // plays a different colour and must never appear in the result.
+        const destroyed = new MatchSystem(grid as never).predict(0, 3, 'blue');
+
+        expect(destroyed).toHaveLength(2);
+        expect(destroyed.every((bubble) => bubble.color === 'blue')).toBe(true);
     });
 });

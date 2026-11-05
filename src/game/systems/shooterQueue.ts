@@ -115,3 +115,23 @@ export const computeShooterQueueUpdate = (
 
     return { current, next };
 };
+
+/**
+ * Random colour for the colour-change button: always different from the
+ * currently loaded bubble and drawn only from the supplied pool (so the swap
+ * can never serve a colour the level does not spawn). With no alternative in
+ * the pool nothing changes — the caller keeps the loaded bubble.
+ */
+export const pickRandomDifferentColor = (
+    pool: readonly BubbleColorName[],
+    currentColor: BubbleColorName,
+    random: () => number = Math.random
+): BubbleColorName | null => {
+    const options = pool.filter((color) => color !== currentColor);
+
+    if (options.length === 0) {
+        return null;
+    }
+
+    return options[Math.floor(random() * options.length)];
+};

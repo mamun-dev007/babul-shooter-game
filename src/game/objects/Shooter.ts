@@ -1,4 +1,4 @@
-import { GameObjects } from 'phaser';
+import { GameObjects, Math as PhaserMath } from 'phaser';
 import {
     BUBBLE_DIAMETER,
     COLOR_NAMES,
@@ -26,6 +26,9 @@ export class Shooter extends GameObjects.Container {
     private colorPicker: (() => BubbleColorName) | null = null;
     private aimAngle = 0;
     private onBubbleSwap: (() => boolean) | null = null;
+    /** Fire Launcher Mode visual (animated flame) replacing the loaded bubble. */
+    private fireLauncher: Phaser.GameObjects.Container | null = null;
+    private fireSparkTimer: Phaser.Time.TimerEvent | null = null;
 
     currentColor: BubbleColorName;
     nextColor: BubbleColorName;
@@ -176,6 +179,132 @@ export class Shooter extends GameObjects.Container {
         this.loadedBubble.setAlpha(fire ? 0.96 : 1);
     }
 
+    /**
+     * Fire Launcher Mode: replaces the normal bubble inside the launcher with
+     * an animated burning flame at the bubble's exact position. Nothing is
+     * moved or resized — the launcher, barrel and swap widgets stay put, and
+     * the flame is extinguished layer by layer when the mode ends.
+     */
+    setFireLauncherMode(active: boolean): void {
+        if (active) {
+            this.enableFireLauncher();
+        } else {
+            this.disableFireLauncher();
+        }
+    }
+
+    private enableFireLauncher(): void {
+        if (this.fireLauncher || !this.scene) {
+            return; // already burning
+        }
+
+        // The normal bubble icon disappears for the whole mode.
+        this.loadedBubble.setVisible(false);
+
+        // Attach the flame to the barrel, not the Shooter container. Barrel
+        // rotation and any launcher reflow therefore transform the fire icon
+        // exactly like the normal loaded bubble.
+        const flame = this.scene.add.container(0, -BARREL_TIP);
+
+        // Soft glowing light around the fire: a slow breathing pulse in
+        // orange — screen-cheap (one circle, one tween). Added first so it
+        // renders behind every flame layer.
+        const glow = this.scene.add.circle(0, 3, 27, 0xff7a1f, 0.3);
+        this.scene.tweens.add({
+            targets: glow,
+            scale: 1.16,
+            alpha: 0.12,
+            duration: 640,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+        });
+        flame.add(glow);
+
+        // Three stacked flame layers (red body, orange wrap, yellow core)
+        // flicker independently: scaleY stretches and a small sway makes the
+        // fire read as alive without ever touching the launcher geometry.
+        const layers = [
+            { y: 4, width: 27, height: 32, color: 0xe8420e, alpha: 0.94, flicker: 470, stretch: 0.3, sway: 1.6 },
+            { y: 1, width: 20, height: 25, color: 0xff8d1f, alpha: 0.97, flicker: 380, stretch: 0.24, sway: -2.1 },
+            { y: -2, width: 13, height: 17, color: 0xffd24a, alpha: 1, flicker: 300, stretch: 0.34, sway: 1.2 },
+        ];
+
+        for (const layer of layers) {
+            const tongue = this.scene.add.circle(0, layer.y, layer.width / 2, layer.color, layer.alpha);
+            tongue.setDisplaySize(layer.width, layer.height);
+            this.scene.tweens.add({
+                targets: tongue,
+                scaleY: { from: 1, to: 1 + layer.stretch },
+                x: { from: -layer.sway, to: layer.sway },
+                duration: layer.flicker,
+                yoyo: true,
+                repeat: -1,
+                ease: 'Sine.easeInOut',
+            });
+            flame.add(tongue);
+        }
+
+        // White-hot centre that pulses like the heart of a real fire.
+        const core = this.scene.add.circle(0, -4, 3.2, 0xfff2c0, 1);
+        this.scene.tweens.add({
+            targets: core,
+            alpha: { from: 0.65, to: 1 },
+            scale: { from: 0.8, to: 1.25 },
+            duration: 260,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Quad.easeInOut',
+        });
+        flame.add(core);
+
+        this.fireLauncher = flame;
+        this.barrel.add(flame);
+
+        // Subtle rising sparks: a few small circles at a time, each fading
+        // and destroying itself — never more than a handful live at once.
+        this.fireSparkTimer = this.scene.time.addEvent({
+            delay: 150,
+            loop: true,
+            callback: () => this.spawnFireSpark(),
+        });
+    }
+
+    private spawnFireSpark(): void {
+        if (!this.scene || !this.fireLauncher) {
+            return;
+        }
+
+        const spark = this.scene.add.circle(
+            PhaserMath.Between(-9, 9),
+            PhaserMath.Between(-4, 4),
+            PhaserMath.FloatBetween(1.4, 2.8),
+            PhaserMath.RND.pick([0xffd24a, 0xff8d1f, 0xe8420e]),
+            PhaserMath.FloatBetween(0.7, 0.95)
+        );
+        this.fireLauncher.add(spark);
+
+        this.scene.tweens.add({
+            targets: spark,
+            y: spark.y - PhaserMath.Between(18, 32),
+            scale: 0.15,
+            alpha: 0,
+            duration: PhaserMath.Between(420, 720),
+            ease: 'Quad.easeOut',
+            onComplete: () => spark.destroy(),
+        });
+    }
+
+    private disableFireLauncher(): void {
+        this.fireSparkTimer?.remove();
+        this.fireSparkTimer = null;
+        this.fireLauncher?.destroy(true);
+        this.fireLauncher = null;
+        // Restore the normal loaded bubble exactly as it was (texture is
+        // driven by refreshTextures; reveal is the only state change here).
+        this.loadedBubble.setVisible(true);
+    }
+
     setLoadedPower(power: 'bomb' | 'fireball' | null, texture: string | null = null): void {
         if (power && texture) {
             this.loadedBubble.setTexture(texture);
@@ -256,5 +385,13 @@ export class Shooter extends GameObjects.Container {
     private refreshTextures(): void {
         this.loadedBubble.setTexture(bubbleTexture(this.currentColor));
         this.nextBubble.setTexture(bubbleTexture(this.nextColor));
+    }
+
+    override destroy(fromScene?: boolean): void {
+        // Never leave the spark timer ticking after the launcher is gone.
+        this.fireSparkTimer?.remove();
+        this.fireSparkTimer = null;
+        this.fireLauncher = null;
+        super.destroy(fromScene);
     }
 }

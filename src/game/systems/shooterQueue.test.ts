@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     computeShooterQueueUpdate,
+    pickRandomDifferentColor,
     pickSmartShooterColor,
     type ColorStat,
 } from './shooterQueue';
@@ -67,5 +68,35 @@ describe('smart shooter queue', () => {
 
         expect(update.current).toBe('green');
         expect(update.next).toBe('yellow');
+    });
+});
+
+describe('pickRandomDifferentColor (colour-change button)', () => {
+    it('always serves a colour different from the loaded bubble', () => {
+        const pool = ['red', 'green', 'blue'] as const;
+        const currentColor: BubbleColorName = 'green';
+
+        for (let roll = 0; roll < 20; roll++) {
+            const picked = pickRandomDifferentColor(pool, currentColor, () => roll / 20);
+
+            expect(picked).not.toBe(currentColor);
+            expect(['red', 'blue']).toContain(picked);
+        }
+    });
+
+    it('draws only from the supplied level pool', () => {
+        // Level serves only green/yellow: excluding green leaves yellow only.
+        const picked = pickRandomDifferentColor(
+            ['green', 'yellow'] as const,
+            'green',
+            () => 0.999999
+        );
+
+        expect(picked).toBe('yellow');
+    });
+
+    it('keeps the loaded bubble when no different colour exists', () => {
+        expect(pickRandomDifferentColor(['red'] as const, 'red')).toBeNull();
+        expect(pickRandomDifferentColor([], 'red')).toBeNull();
     });
 });

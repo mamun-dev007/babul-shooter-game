@@ -49,8 +49,13 @@ export class HUD {
     private colorAdActive = false;
     private readonly pauseButton: Phaser.GameObjects.Container;
     private readonly pauseIcon: Phaser.GameObjects.Image;
-    private readonly powerUpCounts = new Map<PowerUpId, Phaser.GameObjects.Text>();
     private readonly powerUpButtons = new Map<PowerUpId, Phaser.GameObjects.Container>();
+    /** Fire Power charge ring + percent label, on the fireball button only. */
+    private fireRing: Phaser.GameObjects.Graphics | null = null;
+    private fireChargeLabel: Phaser.GameObjects.Text | null = null;
+    /** Live charge percent 0–100 (100 = fully charged, button usable). */
+    private fireChargePercent = 0;
+    private fireChargeTween: Phaser.Tweens.Tween | null = null;
 
     private score = 0;
     private targetScore = 0;
@@ -153,19 +158,28 @@ export class HUD {
                 .image(0, 0, item.key)
                 .setDisplaySize(48, 48);
 
-            const status = scene.add
-                .text(20, 19, 'x0', {
-                    fontFamily: FONT_DISPLAY,
-                    fontSize: '9px',
-                    color: '#ffffff',
-                    backgroundColor: '#ef4f55',
-                    padding: { x: 3, y: 1 },
-                })
-                .setOrigin(0.5);
-
             const hitArea = scene.add
                 .circle(0, 0, 32, 0xffffff, 0.001)
                 .setInteractive({ useHandCursor: true });
+
+            const icons: Phaser.GameObjects.GameObject[] = [card, icon, hitArea];
+
+            // The Fire Power button carries its charge ring + percent readout
+            // (no x1/x2/x3 labels anywhere). It starts disabled at 0% and
+            // only lights up fully charged.
+            if (item.id === 'fireball') {
+                this.fireRing = scene.add.graphics();
+                this.fireChargeLabel = scene.add
+                    .text(0, 21, '0%', {
+                        fontFamily: FONT_DISPLAY,
+                        fontSize: '9px',
+                        color: '#ffffff',
+                        stroke: '#123a35',
+                        strokeThickness: 3,
+                    })
+                    .setOrigin(0.5);
+                icons.push(this.fireRing, this.fireChargeLabel);
+            }
 
             hitArea.on('pointerdown', () => {
                 // The colour-change button's ad flow locks while its video
@@ -177,9 +191,11 @@ export class HUD {
             });
             addPressFx(scene, hitArea, button, { hoverScale: 1.04, pressScale: 0.94 });
 
-            this.powerUpCounts.set(item.id, status);
+            // No on-button multiplier badges (x1/x2/x3): the buttons show
+            // only their icons; the fireball's availability lives in the
+            // charge ring handled by setFireChargeProgress.
             this.powerUpButtons.set(item.id, button);
-            button.add([card, icon, status, hitArea]);
+            button.add(icons);
             toolbarItems.push(button);
         });
 
@@ -398,29 +414,77 @@ export class HUD {
         });
     }
 
-    setPowerUpCount(powerUp: PowerUpId, count: number): void {
-        const label = this.powerUpCounts.get(powerUp);
+    /**
+     * Fire Power charge state. `percent` 0–99 keeps the button visually
+     * disabled (dimmed, no pulse); 100 switches it to the ready look — full
+     * brightness, green charge ring and the gentle ready pulse. The ring and
+     * percent label animate smoothly between values; icons, colours, sizes
+     * and positions of the button itself are untouched.
+     */
+    setFireChargeProgress(percent: number): void {
+        const target = Math.max(0, Math.min(100, percent));
+        const ready = target >= 100;
+        const button = this.powerUpButtons.get('fireball');
 
-        if (!label) {
+        if (button) {
+            button.setAlpha(ready ? 1 : 0.62);
+            this.scene.tweens.killTweensOf(button);
+
+            if (ready) {
+                this.scene.tweens.add({ targets: button, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
+            } else {
+                button.setScale(1);
+            }
+        }
+
+        this.fireChargeTween?.remove();
+        this.fireChargeTween = null;
+
+        const displayed = { value: this.fireChargePercent };
+        this.fireChargeTween = this.scene.tweens.add({
+            targets: displayed,
+            value: target,
+            duration: 320,
+            ease: 'Linear',
+            onUpdate: () => {
+                this.drawFireRing(displayed.value);
+                this.fireChargeLabel?.setText(`${Math.floor(displayed.value)}%`);
+            },
+            onComplete: () => {
+                this.drawFireRing(target);
+                this.fireChargeLabel?.setText(`${Math.floor(target)}%`);
+                this.fireChargePercent = target;
+            },
+        });
+
+        if (target === this.fireChargePercent) {
+            this.drawFireRing(target);
+            this.fireChargeLabel?.setText(`${Math.floor(target)}%`);
+        }
+    }
+
+    /** Redraws the fire charge ring for the given 0–100 percent value. */
+    private drawFireRing(percent: number): void {
+        if (!this.fireRing) {
             return;
         }
 
-        const quantity = Math.max(0, Math.floor(count));
-        label.setText(powerUp === 'fireball' ? `${quantity}` : `x${quantity}`)
-            .setColor(quantity > 0 ? '#ffd28a' : '#9aabb7');
+        const value = Math.max(0, Math.min(100, percent));
+        this.fireRing.clear();
 
-        if (powerUp === 'fireball') {
-            const button = this.powerUpButtons.get(powerUp);
-            if (button) {
-                button.setAlpha(quantity > 0 ? 1 : 0.72);
-                this.scene.tweens.killTweensOf(button);
-                if (quantity > 0) {
-                    this.scene.tweens.add({ targets: button, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
-                } else {
-                    button.setScale(1);
-                }
-            }
+        if (value <= 0) {
+            return;
         }
+
+        const ready = value >= 99.5;
+        // Faint track behind the charged arc, then the arc itself: it starts
+        // at the button's top and sweeps clockwise with the charge.
+        this.fireRing.lineStyle(4.5, 0x123a35, 0.55);
+        this.fireRing.strokeCircle(0, 0, 30);
+        this.fireRing.lineStyle(4.5, ready ? 0x9dff5e : 0xffb52d, 0.95);
+        this.fireRing.beginPath();
+        this.fireRing.arc(0, 0, 30, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (value / 100));
+        this.fireRing.strokePath();
     }
 
     destroy(): void {

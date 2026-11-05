@@ -6,6 +6,8 @@ import {
     type Point,
 } from './geometry';
 import type { GridSystem } from './GridSystem';
+import { MatchSystem } from './MatchSystem';
+import type { BubbleColorName } from '../config';
 
 export interface Velocity {
     x: number;
@@ -91,6 +93,40 @@ export class CollisionSystem {
         );
 
         return result.path;
+    }
+
+    /**
+     * Bubbles a shot fired along `angle` would actually destroy through a
+     * colour match — the mutation-free twin of the live resolve chain. The
+     * same march live shots use halts at the first impact, `resolveCell`
+     * picks the same snap cell the bubble would land on, and MatchSystem's
+     * ≥3 colour rule runs with the fired bubble as a virtual (unplaced)
+     * participant. No board state is touched. An empty result ⇒ the shot
+     * would not trigger a match ⇒ nothing should be highlighted.
+     */
+    predictedMatch(origin: Point, angle: number, color: BubbleColorName): Bubble[] {
+        const result = marchBubble(
+            origin,
+            { x: Math.sin(angle), y: -Math.cos(angle) },
+            PREDICTION_MAX_DISTANCE,
+            this.obstacles(),
+            {
+                maxBounces: PREDICTION_MAX_BOUNCES,
+                ceilingY: this.grid.collisionCeilingY,
+            }
+        );
+
+        if (result.hit?.kind !== 'bubble' || !result.hit.cell) {
+            return [];
+        }
+
+        const cell = this.resolveCell(result.position.x, result.position.y, result.hit.cell);
+
+        if (!cell) {
+            return [];
+        }
+
+        return new MatchSystem(this.grid).predict(cell.row, cell.col, color);
     }
 
     private obstacles(): Obstacle[] {

@@ -167,6 +167,56 @@ describe('snap cell selection', () => {
     });
 });
 
+describe('walk-through trajectory targets', () => {
+    const RAY = { x: 270, y: 300 };
+
+    const stacked = (): Obstacle[] => [
+        obstacle(270, 200, 3, 5),
+        obstacle(270, 200 - 2 * ROW_HEIGHT, 1, 5),
+    ];
+
+    it('records every bubble on the ray in path order and continues past it', () => {
+        const result = marchBubble(
+            RAY,
+            { x: 0, y: -1 },
+            300,
+            stacked(),
+            { passThroughBubbles: true }
+        );
+
+        // The default march would stop at the first bubble; pass-through
+        // walks the full chain, nearest bubble first.
+        expect(result.contacts).toEqual([
+            { row: 3, col: 5 },
+            { row: 1, col: 5 },
+        ]);
+    });
+
+    it('caps the recorded chain when maxContacts is reached', () => {
+        const result = marchBubble(RAY, { x: 0, y: -1 }, 300, stacked(), {
+            passThroughBubbles: true,
+            maxContacts: 1,
+        });
+
+        expect(result.contacts).toEqual([{ row: 3, col: 5 }]);
+    });
+
+    it('still stops the pass-through march at the ceiling', () => {
+        // Two stacked bubbles right below the fixed ceiling: the ray must
+        // record both and terminate with a ceiling hit, never run away.
+        const result = marchBubble(RAY, { x: 0, y: -1 }, 5000, stacked(), {
+            passThroughBubbles: true,
+        });
+
+        expect(result.contacts).toEqual([
+            { row: 3, col: 5 },
+            { row: 1, col: 5 },
+        ]);
+        expect(result.hit?.kind).toBe('ceiling');
+        expect(result.position.y).toBeCloseTo(CEILING_Y, 6);
+    });
+});
+
 describe('swept bubble collision', () => {
     it('reports the first contact distance with a stationary bubble', () => {
         const target = obstacle(270, 200, 3, 5);
