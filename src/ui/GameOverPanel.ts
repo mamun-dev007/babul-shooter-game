@@ -17,6 +17,8 @@ export interface GameOverPanelOptions {
     secondaryLabel: string;
     replayLabel?: string;
     coinReward?: number;
+    /** Flat completion reward (+5 Coins) shown as its own animated badge. */
+    completionCoinReward?: number;
     continuationEnabled?: boolean;
     onPrimary: () => void;
     onSecondary: () => void;
@@ -260,6 +262,38 @@ export class GameOverPanel {
                 })
                 .setOrigin(0.5);
             container.add(reward);
+        }
+
+        if (options.win === true && (options.completionCoinReward ?? 0) > 0) {
+            const badge = scene.add.container(0, 254);
+            const badgeBg = scene.add.graphics();
+            badgeBg.fillStyle(0x020617, 0.45);
+            badgeBg.fillRoundedRect(-65, -10, 130, 24, 12);
+            badgeBg.fillGradientStyle(0xffe38a, 0xffe38a, 0xffb300, 0xffb300, 1);
+            badgeBg.fillRoundedRect(-65, -12, 130, 24, 12);
+            badgeBg.lineStyle(2, 0xffffff, 0.95);
+            badgeBg.strokeRoundedRect(-65, -12, 130, 24, 12);
+            const badgeCoin = scene.add.circle(-44, 0, 9, 0xffc928, 1).setStrokeStyle(2, 0xfff1a8, 1);
+            const badgeText = scene.add
+                .text(8, 0, `+${options.completionCoinReward} Coins`, {
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: '12px',
+                    color: '#7c2d12',
+                })
+                .setOrigin(0.5);
+            badgeText.setName('completion-coins');
+            badge.add([badgeBg, badgeCoin, badgeText]);
+            badge.setScale(0);
+            container.add(badge);
+            this.tracked.push(badge);
+            scene.tweens.add({
+                targets: badge,
+                scaleX: 1,
+                scaleY: 1,
+                duration: 360,
+                delay: 450,
+                ease: 'Back.easeOut',
+            });
         }
 
         if (!won) {

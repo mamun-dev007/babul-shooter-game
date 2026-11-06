@@ -27,6 +27,7 @@ import { emptyFireChargeProgress, resolveFireChargeProgress } from '../systems/f
 import { resolveStreakRewards, type StreakTracking } from '../systems/streakRewards';
 import { levelOutcomeFor } from '../data/levels/scoring';
 import { addCoins, loadProgress, takePendingBonusShots, recordScore, markLevelCompleted, toggleMusic, toggleSound } from '../utils/storage';
+import { recordDailyEvent } from '../daily/dailyTasks';
 import { AimGuide } from '../../ui/AimGuide';
 import { SettingsPanel } from '../../ui/SettingsPanel';
 import { extraBallsRewardFor, showRewardedAd } from '../../ads/rewardedAds';
@@ -106,6 +107,8 @@ export class GameScene extends Scene {
     private streakTracking: StreakTracking = { powerStreak: 0, bombStreak: 0 };
     /** Lock for the rewarded extra-balls flow; guards duplicate claims. */
     private extraBallsInProgress = false;
+    /** True once this attempt's +5 completion coins have been paid out. */
+    private completionRewardGranted = false;
     /** Bumped on shutdown so a completed ad callback can't pay into a new attempt. */
     private extraBallsAdEpoch = 0;
     private selectedPower: ShotPower = null;
@@ -133,6 +136,7 @@ export class GameScene extends Scene {
         this.paused = false;
         this.pauseRestarting = false;
         this.ended = false;
+        this.completionRewardGranted = false;
         this.activeBubble = null;
         this.projectileIcon = null;
         this.fireTrail = null;
@@ -201,6 +205,9 @@ export class GameScene extends Scene {
         // the playable area; nothing is generated later and the board keeps
         // this fixed position — user input never moves it.
         this.grid.followBoard();
+        // Daily Tasks: count one play per attempt — only now that the board
+        // and launcher exist and actual gameplay is starting.
+        recordDailyEvent('play');
         // The bubble formation is FIXED on every device: touch drag, swipe,
         // mouse drag, mouse wheel and trackpad pan can never move the board.
         // `canScroll: () => false` makes every scroll path on the controller
@@ -464,6 +471,7 @@ export class GameScene extends Scene {
             .setDepth(32);
 
         if (power === 'fireball') {
+            recordDailyEvent('fire');
             this.fireParticleAccumulator = 0;
             // The ONLY charge-consumption trigger in the game: a Fire
             // Projectile that actually leaves the launcher. Button clicks,
@@ -482,6 +490,7 @@ export class GameScene extends Scene {
         }
 
         if (power === 'bomb') {
+            recordDailyEvent('bomb');
             // Bomb projectile is launched but is NOT a normal bubble shot and
             // NOT a Fire charging shot. registerShot() is intentionally skipped.
             this.projectileIcon.setTint(0xfff0d8);
@@ -885,6 +894,9 @@ export class GameScene extends Scene {
         this.shotResultRecorded = false;
         const totalDestroyed =
             this.pendingShotDirectRemoved + this.pendingShotUnsupportedRemoved;
+        if (totalDestroyed > 0) {
+            recordDailyEvent('destroy', totalDestroyed);
+        }
         const shotDestroyedAny =
             this.pendingShotDestroyedAny || totalDestroyed > 0;
         // Consecutive-bomb streak (5 successful shots) is unchanged. The
@@ -1035,14 +1047,24 @@ export class GameScene extends Scene {
         const shotsUsed = this.levelSystem.shotsUsedCount;
         const outcome = levelOutcomeFor(this.levelSystem.shotStarLimits, status === 'won', shotsUsed);
 
-        let coinReward = 0;
         if (outcome.unlocksNext) {
-            const newlyCompleted = markLevelCompleted(this.levelSystem.levelIndex, outcome.stars);
-            if (newlyCompleted) {
-                coinReward = 25 + outcome.stars * 10;
-                addCoins(coinReward);
-            }
+            markLevelCompleted(this.levelSystem.levelIndex, outcome.stars);
         }
+
+        if (status === 'won') {
+            recordDailyEvent('complete');
+        }
+
+        // Flat completion reward: exactly 5 Coins for every successful
+        // completion (first time or replay), once per attempt. The ended
+        // guard above plus this flag make repeated callbacks/reopens inert.
+        let completionCoinReward = 0;
+        if (status === 'won' && !this.completionRewardGranted) {
+            this.completionRewardGranted = true;
+            completionCoinReward = 5;
+            addCoins(completionCoinReward);
+        }
+        const coinReward = status === 'won' ? completionCoinReward : undefined;
 
         this.gameOverPanel.show({
             title: outcome.won ? (this.isFinalVictory() ? 'GAME COMPLETE!' : 'LEVEL COMPLETE!') : 'LEVEL FAILED',
@@ -1061,6 +1083,7 @@ export class GameScene extends Scene {
             secondaryLabel: 'LEVEL MAP',
             replayLabel: outcome.won ? 'REPLAY' : 'RETRY',
             coinReward: outcome.won ? coinReward : undefined,
+            completionCoinReward: outcome.won && completionCoinReward > 0 ? completionCoinReward : undefined,
             continuationEnabled: outcome.won ? undefined : false,
             onReplay: () => this.scene.restart({ level: this.currentLevelIndex }),
             onPrimary: () => {

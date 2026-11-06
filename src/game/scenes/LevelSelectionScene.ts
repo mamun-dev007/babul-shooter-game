@@ -49,6 +49,8 @@ export class LevelSelectionScene extends Scene {
     private collectPercentText!: Phaser.GameObjects.Text;
     private currentLevelIndex = 0;
     private infoPanel: Phaser.GameObjects.Container | null = null;
+    private dailyPopup: Phaser.GameObjects.Container | null = null;
+    private dailyPopupTimer: Phaser.Time.TimerEvent | null = null;
     private selectedRing!: Phaser.GameObjects.Graphics;
 
     constructor() {
@@ -63,6 +65,8 @@ export class LevelSelectionScene extends Scene {
         this.dragging = false;
         this.dragMoved = false;
         this.infoPanel = null;
+        this.dailyPopup = null;
+        this.dailyPopupTimer = null;
         this.scrollTween = null;
         this.progress = loadProgress();
         this.entries = buildLevelMap(LEVELS, this.progress);
@@ -87,6 +91,7 @@ export class LevelSelectionScene extends Scene {
         this.hudLayer = this.add.container(0, 0).setDepth(40);
         this.createHud();
         this.createSideButtons();
+        this.showDailyPopup();
         this.createPlayButton();
         this.bindInput();
         // Instantly centre the current playable (selected/frontier) level at
@@ -110,6 +115,13 @@ export class LevelSelectionScene extends Scene {
 
     private handleShutdown(): void {
         this.unbindInput();
+
+        if (this.dailyPopupTimer) {
+            this.dailyPopupTimer.remove();
+            this.dailyPopupTimer = null;
+        }
+        this.dailyPopup?.destroy(true);
+        this.dailyPopup = null;
 
         if (this.scrollTween) {
             this.scrollTween.remove();
@@ -433,6 +445,80 @@ if (entry.state === 'completed') {
         this.hudLayer.add(this.createSideButton(rightX, 240, 'LOCKED', 'UNLOCK LV. 100', 'sale'));
     }
 
+    /**
+     * Small auto-popup beside the Daily button: a single "View Tasks"
+     * button, faded in on entry and faded out after ~3s. Only one popup
+     * can exist at a time; clicking it stops the timer and opens Daily Tasks.
+     */
+    private showDailyPopup(): void {
+        if (this.dailyPopup) {
+            return;
+        }
+
+        const width = worldWidth();
+        const padding = Math.max(34, Math.min(68, width * 0.063));
+        const dailyX = padding;
+        const dailyY = 330;
+        const popupW = 110;
+        const popupH = 36;
+        const popupX = dailyX + 22 + 8 + popupW / 2;
+        const popup = this.add.container(popupX, dailyY).setDepth(45).setAlpha(0);
+        popup.setName('daily-popup');
+
+        const bg = this.add.graphics();
+        bg.fillStyle(0x020617, 0.45);
+        bg.fillRoundedRect(-popupW / 2, -popupH / 2 + 4, popupW, popupH, 18);
+        bg.fillGradientStyle(0x4fc8f5, 0x4fc8f5, 0x168bff, 0x168bff, 1);
+        bg.fillRoundedRect(-popupW / 2, -popupH / 2, popupW, popupH, 18);
+        bg.fillStyle(0xffffff, 0.22);
+        bg.fillRoundedRect(-popupW / 2 + 10, -popupH / 2 + 5, popupW - 20, 11, 6);
+        bg.lineStyle(2, 0xffffff, 0.95);
+        bg.strokeRoundedRect(-popupW / 2, -popupH / 2, popupW, popupH, 18);
+
+        const label = this.add
+            .text(0, 0, 'View Tasks', { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 2 })
+            .setOrigin(0.5)
+            .setName('view-tasks-button');
+        const hit = this.add.rectangle(0, 0, popupW, popupH, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+        hit.on('pointerdown', () => {
+            if (this.locked || this.infoPanel) return;
+            this.hideDailyPopup();
+            this.locked = true;
+            goToScene(this, 'DailyTasksScene', { returnTo: 'LevelSelectionScene' }, 180);
+        });
+        popup.add([bg, label, hit]);
+        this.dailyPopup = popup;
+        this.hudLayer.add(popup);
+
+        this.tweens.add({ targets: popup, alpha: 1, duration: 300, ease: 'Quad.easeOut' });
+        this.dailyPopupTimer = this.time.addEvent({
+            delay: 3000,
+            callback: () => this.hideDailyPopup(),
+        });
+    }
+
+    private hideDailyPopup(): void {
+        if (this.dailyPopupTimer) {
+            this.dailyPopupTimer.remove();
+            this.dailyPopupTimer = null;
+        }
+
+        const popup = this.dailyPopup;
+        this.dailyPopup = null;
+        if (!popup) {
+            return;
+        }
+
+        this.tweens.killTweensOf(popup);
+        this.tweens.add({
+            targets: popup,
+            alpha: 0,
+            duration: 250,
+            ease: 'Quad.easeIn',
+            onComplete: () => popup.destroy(true),
+        });
+    }
+
     private createSideButton(
         x: number,
         y: number,
@@ -444,13 +530,16 @@ if (entry.state === 'completed') {
         const graphics = this.add.graphics();
         this.drawBlueGlossyCircle(graphics, 22);
         this.drawSideIcon(graphics, kind);
-        // Small grey lock at the lower-right of the glossy circle.
-        graphics.fillStyle(0x64748b, 1);
-        graphics.fillCircle(15, 15, 7);
-        graphics.fillStyle(0xe5e7eb, 1);
-        graphics.fillRect(11, 13, 8, 6);
-        graphics.lineStyle(2, 0xe5e7eb, 1);
-        graphics.strokeCircle(15, 11, 3);
+        // Lock badge on every side button except Daily — Daily stays
+        // unlocked/enabled with its original star icon restored.
+        if (title !== 'DAILY') {
+            graphics.fillStyle(0x64748b, 1);
+            graphics.fillCircle(15, 15, 7);
+            graphics.fillStyle(0xe5e7eb, 1);
+            graphics.fillRect(11, 13, 8, 6);
+            graphics.lineStyle(2, 0xe5e7eb, 1);
+            graphics.strokeCircle(15, 11, 3);
+        }
         const titleText = this.add
             .text(0, 30, title, {
                 fontFamily: FONT_DISPLAY,
@@ -471,11 +560,19 @@ if (entry.state === 'completed') {
             .setOrigin(0.5);
         const hit = this.add.circle(0, 0, 26, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
         hit.setData('sideButton', true);
-        hit.on('pointerdown', () => {
-            if (!this.infoPanel) {
-                this.toggleInfo();
-            }
-        });
+        if (title === 'DAILY') {
+            hit.on('pointerdown', () => {
+                if (this.locked || this.infoPanel) return;
+                this.locked = true;
+                goToScene(this, 'DailyTasksScene', { returnTo: 'LevelSelectionScene' }, 180);
+            });
+        } else {
+            hit.on('pointerdown', () => {
+                if (!this.infoPanel) {
+                    this.toggleInfo();
+                }
+            });
+        }
         button.add([graphics, titleText, unlockText, hit]);
         return button;
     }
