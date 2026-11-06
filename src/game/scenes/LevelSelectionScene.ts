@@ -3,13 +3,10 @@ import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { LEVELS } from '../data/levels';
 import {
     buildLevelMap,
-    levelMapHeight,
     levelMapPageScroll,
+    levelMapCenterScroll,
     mapScrollBounds,
-    MAP_BOTTOM_PAD,
-    MAP_NODE_SPACING,
     levelMapPositionAt,
-    NODE_TINT_COLORS,
     configureLevelMapLayout,
     type LevelMapEntry,
 } from '../data/levels/map';
@@ -21,27 +18,19 @@ import { loadProgress, type Progress } from '../utils/storage';
 import { installUiAudio } from '../audio/GameAudio';
 import { fadeInScene, goToScene } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
-import { Button, IconButton } from '../../ui/design';
+import { Button } from '../../ui/design';
+import { drawVectorIcon, type VectorIcon } from '../../ui/vectorIcons';
 import { attachRelayout, mapViewTopY, mapViewBottomY, worldWidth, worldHeight } from '../layout';
 
 let VIEW_TOP = mapViewTopY();
 let VIEW_BOTTOM = mapViewBottomY();
 const DRAG_THRESHOLD = 10;
-/** Nodes kept alive around the viewport while scrolling. */
-const CULL_MARGIN = 220;
-/** How far the drawn road reaches past the visible band. */
-const PATH_MARGIN_NODES = 4;
-/** Fade duration for showing a newly culled-in node. */
-const NODE_SHOW_DURATION = 160;
-
-const PATH_COLOR_CYCLE = [0x38bdf8, 0x22d3ee, 0x34d399, 0xfbbf24, 0xf472b6, 0xa78bfa];
 
 export class LevelSelectionScene extends Scene {
     private locked = false;
     private selectedLevel = 0;
     private progress!: Progress;
     private entries: LevelMapEntry[] = [];
-    private mapHeight = 0;
     private scrollY = 0;
     private dragging = false;
     private dragMoved = false;
@@ -56,6 +45,9 @@ export class LevelSelectionScene extends Scene {
     private marker!: Phaser.GameObjects.Container;
     private playButton!: Button;
     private coinBalanceText!: Phaser.GameObjects.Text;
+    private collectFill!: Phaser.GameObjects.Graphics;
+    private collectPercentText!: Phaser.GameObjects.Text;
+    private currentLevelIndex = 0;
     private infoPanel: Phaser.GameObjects.Container | null = null;
     private selectedRing!: Phaser.GameObjects.Graphics;
 
@@ -63,7 +55,7 @@ export class LevelSelectionScene extends Scene {
         super('LevelSelectionScene');
     }
 
-    create(): void {
+    create(data: { instant?: boolean } = {}): void {
         VIEW_TOP = mapViewTopY();
         VIEW_BOTTOM = mapViewBottomY();
         configureLevelMapLayout(worldWidth(), VIEW_BOTTOM - VIEW_TOP);
@@ -74,7 +66,7 @@ export class LevelSelectionScene extends Scene {
         this.scrollTween = null;
         this.progress = loadProgress();
         this.entries = buildLevelMap(LEVELS, this.progress);
-        this.mapHeight = levelMapHeight(this.entries.length);
+        this.currentLevelIndex = this.entries.find((entry) => entry.state === 'unlocked')?.index ?? 0;
         // Auto-scroll to the furthest unlocked level on open (requirement:
         // the highest unlocked stop is highlighted as soon as the map shows).
         this.selectedLevel = Math.max(
@@ -90,12 +82,17 @@ export class LevelSelectionScene extends Scene {
         this.nodeLayer = this.add.container(0, 0);
         this.mapLayer.add(this.nodeLayer);
         this.createNodes();
+        this.drawFullRoad();
         this.createMarker();
         this.hudLayer = this.add.container(0, 0).setDepth(40);
         this.createHud();
+        this.createSideButtons();
         this.createPlayButton();
         this.bindInput();
-        this.scrollToLevel(this.selectedLevel, false);
+        // Instantly centre the current playable (selected/frontier) level at
+        // the vertical centre of the visible map area — exact level centre,
+        // not the page band — with no scroll animation on open.
+        this.centerLevelInstantly(this.selectedLevel);
         this.refreshHud();
         attachRelayout(this, () => {
             VIEW_TOP = mapViewTopY();
@@ -105,7 +102,9 @@ export class LevelSelectionScene extends Scene {
             this.scene.restart();
         });
 
-        fadeInScene(this, 280, [5, 10, 25]);
+        if (!data.instant) {
+            fadeInScene(this, 280, [5, 10, 25]);
+        }
         this.events.once('shutdown', this.handleShutdown, this);
     }
 
@@ -141,56 +140,106 @@ export class LevelSelectionScene extends Scene {
 
             const graphics = this.add.graphics();
             const locked = entry.state === 'locked';
-            const tint = locked ? 0x64748b : NODE_TINT_COLORS[entry.tint];
+            const isCurrent = entry.index === this.currentLevelIndex && entry.state === 'unlocked';
             const radius = 26;
-
-            graphics.fillStyle(0x020617, 0.45);
-            graphics.fillCircle(2, 4, radius + 2);
-            graphics.fillStyle(tint, locked ? 0.55 : 1);
-            graphics.fillCircle(0, 0, radius);
-            graphics.fillStyle(0xffffff, locked ? 0.08 : 0.22);
-            graphics.fillCircle(-7, -8, 9);
-            graphics.lineStyle(3, entry.state === 'completed' ? 0xfbbf24 : 0xf8fafc, 0.9);
-            graphics.strokeCircle(0, 0, radius);
-
+            this.drawLevelButton(graphics, locked, isCurrent, radius);
             node.add(graphics);
 
             const label = this.add
                 .text(0, -1, String(entry.id), {
                     fontFamily: FONT_DISPLAY,
                     fontSize: entry.id >= 1000 ? '12px' : '15px',
-                    color: locked ? '#334155' : '#0f172a',
+                    color: locked ? '#ffffff' : '#ffffff',
+                    stroke: locked ? '#334155' : '#3b0764',
+                    strokeThickness: locked ? 3 : 4,
                 })
                 .setOrigin(0.5);
             node.add(label);
 
-            if (entry.state === 'completed' && entry.stars > 0) {
-                for (let star = 0; star < 3; star++) {
-                    const mark = this.add
-                        .text((star - 1) * 12, 36, '★', {
-                            fontFamily: FONT,
-                            fontSize: '11px',
-                            color: star < entry.stars ? '#fbbf24' : '#64748b',
-                        })
-                        .setOrigin(0.5);
-                    node.add(mark);
-                }
-            }
-
+if (entry.state === 'completed') {
+    const offsets = [-20, 0, 20];
+    const ys = [-34, -41, -34];
+    const angles = [-20, 0, 20];
+    offsets.forEach((offsetX, star) => {
+        const mark = this.add
+            .text(offsetX, ys[star], '★', {
+                fontFamily: FONT_DISPLAY,
+                fontSize: '22px',
+                color: star < entry.stars ? '#fcd34d' : '#6b5fa8',
+                stroke: '#b45309',
+                strokeThickness: 3,
+            })
+            .setOrigin(0.5)
+            .setAngle(angles[star]);
+        node.add(mark);
+    });
+}
             const hit = this.add.circle(0, 0, 32, 0xffffff, 0.001).setInteractive({
                 useHandCursor: !locked,
             });
             node.add(hit);
             hit.on('pointerup', () => this.trySelect(entry.index));
-            // Culling starts fully hidden; the first scroll pass reveals it.
-            node.setVisible(false);
+            // Every level stays rendered in the scrolling map — visibility is
+            // governed only by the scroll position and screen bounds, never
+            // by hiding nodes. The ~10-visible layout comes from the node
+            // spacing plus scrolling, not from a rendering limit.
+            node.setVisible(true);
             this.nodeLayer.add(node);
         });
 
         this.selectedRing = this.add.graphics();
         this.nodeLayer.add(this.selectedRing);
         this.drawSelectedRing();
-        this.updateVisibleNodes();
+    }
+
+    /**
+     * Reference-style level button: glossy 3D discs. Completed/current are
+     * bright purple, current adds a green glow, locked is grey. Layered
+     * shadow → outer rim → main disc → inner light → highlight → border
+     * gives the depth without changing the 26px radius or touch target.
+     */
+    private drawLevelButton(
+        graphics: Phaser.GameObjects.Graphics,
+        locked: boolean,
+        isCurrent: boolean,
+        radius: number
+    ): void {
+        if (isCurrent) {
+            graphics.fillStyle(0x38d94a, 0.28);
+            graphics.fillCircle(0, 0, radius + 12);
+            graphics.fillStyle(0x38d94a, 0.45);
+            graphics.fillCircle(0, 0, radius + 5);
+        }
+        graphics.fillStyle(0x020617, 0.45);
+        graphics.fillCircle(2, 4, radius + 2);
+        if (locked) {
+            graphics.fillStyle(0x374151, 1);
+            graphics.fillCircle(0, 0, radius);
+            graphics.fillStyle(0x9ca3af, 1);
+            graphics.fillCircle(0, -1, radius - 3);
+            graphics.fillStyle(0xd1d5db, 0.9);
+            graphics.fillCircle(-4, -6, radius - 10);
+            graphics.fillStyle(0xffffff, 0.35);
+            graphics.fillCircle(-7, -9, 7);
+            graphics.lineStyle(2, 0xe5e7eb, 0.6);
+            graphics.strokeCircle(0, 0, radius);
+            return;
+        }
+        graphics.fillStyle(0x3b1270, 1);
+        graphics.fillCircle(0, 0, radius);
+        graphics.fillStyle(0x8b5cf6, 1);
+        graphics.fillCircle(0, -1, radius - 3);
+        graphics.fillStyle(0xc4b5fd, 0.95);
+        graphics.fillCircle(-2, -4, radius - 8);
+        graphics.fillStyle(0xffffff, 0.35);
+        graphics.fillCircle(-7, -9, 7);
+        if (isCurrent) {
+            graphics.lineStyle(1, 0x38d94a, 1);
+            graphics.strokeCircle(0, 0, radius + 1);
+        } else {
+            graphics.lineStyle(1, 0xe9d5ff, 0.9);
+            graphics.strokeCircle(0, 0, radius);
+        }
     }
 
     private drawSelectedRing(): void {
@@ -201,10 +250,10 @@ export class LevelSelectionScene extends Scene {
             return;
         }
 
-        this.selectedRing.lineStyle(4, 0xfde68a, 1);
-        this.selectedRing.strokeCircle(entry.x, entry.y, 34);
+        this.selectedRing.lineStyle(2, 0xfde68a, 1);
+        this.selectedRing.strokeCircle(entry.x, entry.y, 26);
         this.selectedRing.lineStyle(2, 0xffffff, 0.7);
-        this.selectedRing.strokeCircle(entry.x, entry.y, 40);
+        this.selectedRing.strokeCircle(entry.x, entry.y, 30);
     }
 
     private createMarker(): void {
@@ -237,32 +286,21 @@ export class LevelSelectionScene extends Scene {
     }
 
     private createHud(): void {
-        const settings = new IconButton(this, {
-            x: 36,
-            y: 48,
-            icon: 'gear',
-            background: false,
-            size: 24,
-            onClick: () => this.goToSettings(),
-        });
-        const info = new IconButton(this, {
-            x: 88,
-            y: 48,
-            icon: 'info',
-            background: false,
-            size: 24,
-            onClick: () => this.toggleInfo(),
-        });
-
-        this.hudLayer.add([settings.getContainer(), info.getContainer()]);
+        this.hudLayer.add(this.createGlossyTopButton(32, 48, 'gear', () => this.goToSettings()));
+        this.hudLayer.add(this.createGlossyTopButton(76, 48, 'info', () => this.toggleInfo()));
 
         const coinBg = this.add.graphics();
-        coinBg.fillStyle(0x0f172a, 0.96);
-        coinBg.fillRoundedRect(GAME_WIDTH - 147, 27, 127, 42, 21);
-        coinBg.lineStyle(2, 0xfff3b0, 0.95);
-        coinBg.strokeRoundedRect(GAME_WIDTH - 147, 27, 127, 42, 21);
-        coinBg.lineStyle(2, 0xf59e0b, 0.95);
-        coinBg.strokeRoundedRect(GAME_WIDTH - 143, 31, 119, 34, 17);
+        const coinX = GAME_WIDTH - 147;
+        coinBg.fillStyle(0x020617, 0.45);
+        coinBg.fillRoundedRect(coinX, 30, 127, 42, 21);
+        coinBg.fillStyle(0x0a3d91, 1);
+        coinBg.fillRoundedRect(coinX, 27, 127, 42, 21);
+        coinBg.fillGradientStyle(0x4fc8f5, 0x4fc8f5, 0x168bff, 0x168bff, 1);
+        coinBg.fillRoundedRect(coinX + 4, 31, 119, 34, 17);
+        coinBg.fillStyle(0xffffff, 0.22);
+        coinBg.fillRoundedRect(coinX + 12, 33, 103, 12, 6);
+        coinBg.lineStyle(2, 0xffffff, 0.9);
+        coinBg.strokeRoundedRect(coinX, 27, 127, 42, 21);
         const coin = this.add.circle(GAME_WIDTH - 122, 48, 14, 0xffc928, 1)
             .setStrokeStyle(3, 0xfff1a8, 1);
         const coinMark = this.add
@@ -278,7 +316,9 @@ export class LevelSelectionScene extends Scene {
             .text(GAME_WIDTH - 82, 48, this.progress.coins.toLocaleString('en-US'), {
                 fontFamily: FONT_DISPLAY,
                 fontSize: '15px',
-                color: '#fde68a',
+                color: '#ffffff',
+                stroke: '#0a3d91',
+                strokeThickness: 3,
             })
             .setOrigin(0.5);
         this.coinBalanceText.setName('coin-balance');
@@ -294,13 +334,199 @@ export class LevelSelectionScene extends Scene {
         }).setOrigin(0.5);
         addCoins.on('pointerdown', () => addCoinsText.setScale(0.88));
         addCoins.on('pointerup', () => addCoinsText.setScale(1));
+        addCoins.on('pointerdown', () => this.goToCoinStore());
         this.hudLayer.add([addCoins, addCoinsText]);
+
+        // Collect Items panel with progress bar and gift icon.
+        const collectX = GAME_WIDTH / 2 - 160;
+        const collectBg = this.add.graphics();
+        collectBg.fillStyle(0x020617, 0.45);
+        collectBg.fillRoundedRect(collectX, 72, 320, 38, 19);
+        collectBg.fillStyle(0x1e1b4b, 0.96);
+        collectBg.fillRoundedRect(collectX, 69, 320, 38, 19);
+        collectBg.fillGradientStyle(0x3b1270, 0x3b1270, 0x1e1b4b, 0x1e1b4b, 1);
+        collectBg.fillRoundedRect(collectX + 4, 73, 312, 30, 15);
+        collectBg.fillStyle(0xffffff, 0.14);
+        collectBg.fillRoundedRect(collectX + 12, 75, 296, 11, 6);
+        collectBg.lineStyle(2, 0xa855f7, 0.9);
+        collectBg.strokeRoundedRect(collectX, 69, 320, 38, 19);
+        const giftIcon = this.add.graphics();
+        giftIcon.fillStyle(0x020617, 0.4);
+        giftIcon.fillCircle(GAME_WIDTH / 2 - 138, 90, 14);
+        giftIcon.fillStyle(0x168bff, 1);
+        giftIcon.fillCircle(GAME_WIDTH / 2 - 138, 88, 13);
+        giftIcon.fillStyle(0xffc928, 1);
+        giftIcon.fillRect(GAME_WIDTH / 2 - 145, 84, 14, 10);
+        giftIcon.fillStyle(0xff454f, 1);
+        giftIcon.fillRect(GAME_WIDTH / 2 - 145, 81, 14, 4);
+        giftIcon.fillStyle(0xfff1a8, 1);
+        giftIcon.fillRect(GAME_WIDTH / 2 - 139.5, 81, 3, 13);
+        const collectLabel = this.add
+            .text(GAME_WIDTH / 2 - 116, 88, 'COLLECT ITEMS', {
+                fontFamily: FONT_DISPLAY,
+                fontSize: '10px',
+                color: '#ffffff',
+                stroke: '#1e1b4b',
+                strokeThickness: 3,
+            })
+            .setOrigin(0, 0.5);
+        this.collectFill = this.add.graphics();
+        this.collectPercentText = this.add
+            .text(GAME_WIDTH / 2 + 142, 88, '', {
+                fontFamily: FONT_DISPLAY,
+                fontSize: '10px',
+                color: '#fde68a',
+            })
+            .setOrigin(0.5);
+        this.hudLayer.add([collectBg, giftIcon, collectLabel, this.collectFill, this.collectPercentText]);
+    }
+
+    private createGlossyTopButton(
+        x: number,
+        y: number,
+        icon: VectorIcon,
+        onClick: () => void
+    ): Phaser.GameObjects.Container {
+        const button = this.add.container(x, y);
+        const graphics = this.add.graphics();
+        this.drawBlueGlossyCircle(graphics, 22);
+        const iconGraphics = this.add.graphics().setScale(1.25);
+        drawVectorIcon(iconGraphics, icon, 0xffffff, true, 0x0a3d91);
+        const hit = this.add.circle(0, 0, 26, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+        hit.on('pointerdown', () => onClick());
+        addPressFx(this, hit, button, { hoverScale: 1.06, pressScale: 0.92 });
+        button.add([graphics, iconGraphics, hit]);
+        return button;
+    }
+
+    private drawBlueGlossyCircle(graphics: Phaser.GameObjects.Graphics, radius: number): void {
+        graphics.fillStyle(0x020617, 0.45);
+        graphics.fillCircle(2, 4, radius + 2);
+        graphics.fillStyle(0x0a3d91, 1);
+        graphics.fillCircle(0, 0, radius);
+        graphics.fillStyle(0x168bff, 1);
+        graphics.fillCircle(0, -1, radius - 3);
+        graphics.fillStyle(0x4fc8f5, 0.9);
+        graphics.fillCircle(-3, -5, radius - 8);
+        graphics.fillStyle(0xffffff, 0.35);
+        graphics.fillCircle(-6, -8, 6);
+        graphics.lineStyle(2, 0xffffff, 0.9);
+        graphics.strokeCircle(0, 0, radius);
+    }
+
+    private createSideButtons(): void {
+        // Responsive horizontal padding — a proportion of the world width,
+        // clamped so the buttons sit slightly inward on phones yet do not
+        // drift too far on wide desktop layouts. Both sides use the same
+        // padding for balanced alignment, and the S-path (centred with its
+        // widest nodes 90px from either edge at design width) keeps a clear
+        // gap to the road. Buttons also stay fully inside the screen
+        // (centre ± hit radius/label width never crosses an edge).
+        const width = worldWidth();
+        const padding = Math.max(34, Math.min(68, width * 0.063));
+        const leftX = padding;
+        const rightX = width - padding;
+        this.hudLayer.add(this.createSideButton(leftX, 150, 'STARTER', 'UNLOCK LV. 10', 'chest'));
+        this.hudLayer.add(this.createSideButton(leftX, 240, 'GIFT', 'UNLOCK LV. 25', 'gift'));
+        this.hudLayer.add(this.createSideButton(leftX, 330, 'DAILY', 'UNLOCK LV. 50', 'star'));
+        this.hudLayer.add(this.createSideButton(rightX, 150, 'SALE', 'UNLOCK LV. 15', 'sale'));
+        this.hudLayer.add(this.createSideButton(rightX, 240, 'LOCKED', 'UNLOCK LV. 100', 'sale'));
+    }
+
+    private createSideButton(
+        x: number,
+        y: number,
+        title: string,
+        unlock: string,
+        kind: 'chest' | 'gift' | 'sale' | 'star'
+    ): Phaser.GameObjects.Container {
+        const button = this.add.container(x, y);
+        const graphics = this.add.graphics();
+        this.drawBlueGlossyCircle(graphics, 22);
+        this.drawSideIcon(graphics, kind);
+        // Small grey lock at the lower-right of the glossy circle.
+        graphics.fillStyle(0x64748b, 1);
+        graphics.fillCircle(15, 15, 7);
+        graphics.fillStyle(0xe5e7eb, 1);
+        graphics.fillRect(11, 13, 8, 6);
+        graphics.lineStyle(2, 0xe5e7eb, 1);
+        graphics.strokeCircle(15, 11, 3);
+        const titleText = this.add
+            .text(0, 30, title, {
+                fontFamily: FONT_DISPLAY,
+                fontSize: '8px',
+                color: '#ffffff',
+                stroke: '#0a3d91',
+                strokeThickness: 3,
+            })
+            .setOrigin(0.5);
+        const unlockText = this.add
+            .text(0, 41, unlock, {
+                fontFamily: FONT_DISPLAY,
+                fontSize: '7px',
+                color: '#fde68a',
+                stroke: '#0a3d91',
+                strokeThickness: 2,
+            })
+            .setOrigin(0.5);
+        const hit = this.add.circle(0, 0, 26, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+        hit.setData('sideButton', true);
+        hit.on('pointerdown', () => {
+            if (!this.infoPanel) {
+                this.toggleInfo();
+            }
+        });
+        button.add([graphics, titleText, unlockText, hit]);
+        return button;
+    }
+
+    private drawSideIcon(graphics: Phaser.GameObjects.Graphics, kind: 'chest' | 'gift' | 'sale' | 'star'): void {
+        if (kind === 'chest') {
+            graphics.fillStyle(0x92400e, 1);
+            graphics.fillRoundedRect(-10, -4, 20, 14, 3);
+            graphics.fillStyle(0xb45309, 1);
+            graphics.fillRoundedRect(-10, -10, 20, 8, 4);
+            graphics.fillStyle(0xffc928, 1);
+            graphics.fillRect(-2, -10, 4, 20);
+            graphics.fillStyle(0xfff1a8, 1);
+            graphics.fillRect(-3, 0, 6, 5);
+        } else if (kind === 'sale') {
+            graphics.fillStyle(0xff454f, 1);
+            graphics.fillRoundedRect(-11, -7, 22, 14, 4);
+            graphics.fillStyle(0xffffff, 1);
+            graphics.fillCircle(7, -4, 2);
+            graphics.fillStyle(0xffe38a, 1);
+            graphics.fillRoundedRect(-4, -3, 9, 3, 1.5);
+            graphics.fillRoundedRect(-1, 3, 9, 3, 1.5);
+        } else if (kind === 'gift') {
+            graphics.fillStyle(0x168bff, 1);
+            graphics.fillRect(-9, -2, 18, 12);
+            graphics.fillStyle(0xff454f, 1);
+            graphics.fillRect(-10, -7, 20, 5);
+            graphics.fillStyle(0xffc928, 1);
+            graphics.fillRect(-2, -7, 4, 17);
+        } else {
+            graphics.fillStyle(0xffc928, 1);
+            graphics.fillCircle(0, 0, 9);
+            graphics.fillStyle(0xfff1a8, 1);
+            graphics.fillCircle(0, 0, 6);
+            graphics.fillStyle(0x92400e, 1);
+            graphics.fillTriangle(0, -7, -2, -2, 2, -2);
+            graphics.fillTriangle(-6, 1, -2, 1, -2, 5);
+            graphics.fillTriangle(6, 1, 2, 1, 2, 5);
+        }
     }
 
     private goToSettings(): void {
         if (this.locked) return;
         this.locked = true;
         goToScene(this, 'SettingsScene', { returnTo: 'LevelSelectionScene' }, 180);
+    }
+
+    private goToCoinStore(): void {
+        if (this.locked) return;
+        this.locked = true;
+        goToScene(this, 'CoinStoreScene', { returnTo: 'LevelSelectionScene' }, 180);
     }
 
     private createPlayButton(): void {
@@ -362,6 +588,13 @@ export class LevelSelectionScene extends Scene {
             return;
         }
 
+        const overSideButton = this.input
+            .hitTestPointer(pointer)
+            .some((gameObject) => gameObject.getData('sideButton') === true);
+        if (overSideButton) {
+            return;
+        }
+
         this.dragging = true;
         this.dragMoved = false;
         this.dragStartY = pointer.y;
@@ -416,103 +649,50 @@ export class LevelSelectionScene extends Scene {
     private setScroll(next: number): void {
         const bounds = mapScrollBounds(this.entries.length, VIEW_TOP, VIEW_BOTTOM);
         this.scrollY = bounds.clamp(next);
+        // The whole map (road + every level, all 1000) lives in this one
+        // layer, so scrolling moves road and buttons together with no
+        // per-scroll redraw and no hiding — only the layer offset changes.
         this.mapLayer.setY(this.scrollY);
-        this.updateVisibleNodes();
-    }
-
-    private updateVisibleNodes(): void {
-        if (!this.nodeLayer) {
-            return;
-        }
-
-        for (const object of this.nodeLayer.list) {
-            if (object.type !== 'Container') {
-                // The selection ring and marker always render.
-                continue;
-            }
-
-            const node = object as Phaser.GameObjects.Container;
-            const screenY = node.y + this.scrollY;
-            const visible = screenY >= VIEW_TOP - CULL_MARGIN && screenY <= VIEW_BOTTOM + CULL_MARGIN;
-
-            if (visible && !node.visible) {
-                node.setVisible(true);
-                node.setAlpha(0);
-                this.tweens.add({ targets: node, alpha: 1, duration: NODE_SHOW_DURATION });
-            } else if (!visible && node.visible) {
-                this.tweens.killTweensOf(node);
-                node.setAlpha(1);
-                node.setVisible(false);
-            }
-        }
-
-        this.drawVisiblePath();
     }
 
     /* ---------------------------------------------------------------- */
-    /* Snake path + world art, drawn only for the visible scroll window   */
+    /* Snake path + world art, drawn once for the whole scrollable map    */
     /* ---------------------------------------------------------------- */
 
-    private visibleNodeWindow(): { first: number; last: number } | null {
-        const firstNodeY = this.mapHeight - MAP_BOTTOM_PAD;
-        const topY = VIEW_TOP - this.scrollY - CULL_MARGIN;
-        const bottomY = VIEW_BOTTOM - this.scrollY + CULL_MARGIN;
-        const count = this.entries.length;
-
-        let first = Math.ceil((firstNodeY - bottomY) / MAP_NODE_SPACING);
-        let last = Math.floor((firstNodeY - topY) / MAP_NODE_SPACING);
-        first = Math.max(0, first - 1);
-        last = Math.min(count - 1, last + 1);
-
-        if (first > last || count === 0) {
-            return null;
-        }
-
-        return { first, last };
-    }
-
-    private drawVisiblePath(): void {
-        const window = this.visibleNodeWindow();
-
-        if (!window) {
+    private drawFullRoad(): void {
+        if (this.entries.length === 0) {
             return;
         }
 
-        this.drawPathSegments(window);
+        this.drawPathSegments({ first: 0, last: this.entries.length - 1 });
     }
 
-    /** Layered fantasy road segments between the visible snake nodes. */
+    /** Layered sandy S-road over the fixed background: soft shadow, rim, main sand, centre light. */
     private drawPathSegments(window: { first: number; last: number }): void {
         const graphics = this.pathGraphics;
         graphics.clear();
 
-        const points = this.entries;
+        const first = window.first;
+        const last = window.last;
 
-        const first = Math.max(0, window.first - PATH_MARGIN_NODES);
-        const last = Math.min(points.length - 1, window.last + PATH_MARGIN_NODES);
+        // Depth shadow, then the polished sandy layers that sit naturally
+        // on the cave sand. Every layer follows the same smooth sine S-curve
+        // (levelMapPositionAt) so the road stays centred on the nodes.
+        graphics.lineStyle(70, 0x5b3fc4, 0.35)
+        this.strokeWindowing(graphics, first, last);
+        graphics.lineStyle(60, 0x7c5a2e, 1);
+        this.strokeWindowing(graphics, first, last);
+        graphics.lineStyle(48, 0xf7e7b0, 1);
+        this.strokeWindowing(graphics, first, last);
+        graphics.lineStyle(36, 0xfff3c4, 0.55);
+        this.strokeWindowing(graphics, first, last);
 
-        // Base road layers — a wide dark bed with glowing accents.
-        graphics.lineStyle(38, 0x1e1b4b, 0.9);
-        this.strokeWindowing(graphics, first, last);
-        graphics.lineStyle(28, 0xc4b5fd, 0.42);
-        this.strokeWindowing(graphics, first, last);
-        graphics.lineStyle(18, 0xfde68a, 0.88);
-        this.strokeWindowing(graphics, first, last);
-        graphics.lineStyle(8, 0xfef3c7, 0.55);
-        this.strokeWindowing(graphics, first, last);
-
-        // Candy-coloured overlay for each snake bend.
-        graphics.lineStyle(6, 0xffffff, 0.95);
+        // Soft centre highlight dots for the worn-path look.
+        graphics.lineStyle(4, 0xffffff, 0.55);
         for (let index = first + 1; index <= last; index++) {
-            graphics.lineStyle(6, PATH_COLOR_CYCLE[Math.floor(index / 8) % PATH_COLOR_CYCLE.length], 0.95);
-            graphics.beginPath();
-            graphics.moveTo(points[index - 1].x, points[index - 1].y);
-            for (let sample = 1; sample <= 8; sample++) {
-                const curveIndex = index - 1 + sample / 8;
-                const curvePoint = levelMapPositionAt(curveIndex, points.length);
-                graphics.lineTo(curvePoint.x, curvePoint.y);
-            }
-            graphics.strokePath();
+            const previous = this.entries[index - 1];
+            const current = this.entries[index];
+            graphics.lineBetween(previous.x, previous.y, current.x, current.y);
         }
 
         this.drawPathArrows(graphics, first, last);
@@ -557,10 +737,10 @@ export class LevelSelectionScene extends Scene {
                 y: midY + localX * sin + localY * cos,
             });
 
-            const tip = transform(12, 0);
+            const tip = transform(8, 0);
             const upper = transform(-8, -10);
             const lower = transform(-8, 10);
-            graphics.fillStyle(0xfff6bf, 0.95);
+            graphics.fillStyle(0x6b4f2a, 0.85);
             graphics.fillTriangle(tip.x, tip.y, upper.x, upper.y, lower.x, lower.y);
         }
     }
@@ -596,6 +776,25 @@ export class LevelSelectionScene extends Scene {
         }
 
         this.animateScroll(clamped);
+    }
+
+    /**
+     * Instantly places `index` at the vertical centre of the visible map
+     * area (VIEW_TOP..VIEW_BOTTOM), using its actual road position. The
+     * horizontal position is untouched and the prior scroll tween is
+     * killed. Deliberately unclamped so even the first/last levels centre
+     * exactly — drag/wheel scrolling afterwards stays clamped. Used for
+     * the opening scroll — no animation.
+     */
+    private centerLevelInstantly(index: number): void {
+        const entry = this.entries[index];
+        if (!entry) {
+            return;
+        }
+
+        this.killScrollTween();
+        this.scrollY = levelMapCenterScroll(index, this.entries.length, VIEW_TOP, VIEW_BOTTOM);
+        this.mapLayer.setY(this.scrollY);
     }
 
     private trySelect(index: number): void {
@@ -636,6 +835,31 @@ export class LevelSelectionScene extends Scene {
 
         if (this.coinBalanceText) {
             this.coinBalanceText.setText(this.progress.coins.toLocaleString('en-US'));
+        }
+
+        const completed = this.progress.completedLevels.length;
+
+        if (this.collectFill) {
+            const ratio = LEVELS.length > 0 ? completed / LEVELS.length : 0;
+            const barX = GAME_WIDTH / 2 - 30;
+            const barY = 88;
+            const barW = 140;
+            const barH = 10;
+            this.collectFill.clear();
+            this.collectFill.fillStyle(0x02050d, 0.85);
+            this.collectFill.fillRoundedRect(barX, barY - barH / 2, barW, barH, 5);
+            if (ratio > 0) {
+                const fillW = Math.max(barH, barW * ratio);
+                this.collectFill.fillGradientStyle(0xffe38a, 0xffe38a, 0xffc928, 0xffc928, 1);
+                this.collectFill.fillRoundedRect(barX, barY - barH / 2, fillW, barH, 5);
+            }
+            this.collectFill.lineStyle(1.5, 0xffffff, 0.7);
+            this.collectFill.strokeRoundedRect(barX, barY - barH / 2, barW, barH, 5);
+        }
+
+        if (this.collectPercentText) {
+            const percent = LEVELS.length > 0 ? Math.round((completed / LEVELS.length) * 100) : 0;
+            this.collectPercentText.setText(`${percent}%`);
         }
 
         const state = this.selectedState();
@@ -707,3 +931,5 @@ export class LevelSelectionScene extends Scene {
         addPressFx(this, close, close, { hoverScale: 1.06, pressScale: 0.94 });
     }
 }
+
+

@@ -79,6 +79,24 @@ describe('resolveFireChargeProgress', () => {
         expect(step.reachedFull).toBe(false);
     });
 
+    it('keeps 100% locked after later missed normal shots (only Fire launch resets)', () => {
+        let state = emptyFireChargeProgress(6); // required = 2
+
+        state = resolveFireChargeProgress(state, true, 6).progress;
+        state = resolveFireChargeProgress(state, true, 6).progress;
+        expect(state.percent).toBe(100);
+
+        const missed = resolveFireChargeProgress(state, false, 6);
+        expect(missed.reset).toBe(false);
+        expect(missed.reachedFull).toBe(false);
+        expect(missed.progress.percent).toBe(100);
+        expect(missed.progress.streak).toBe(state.streak);
+
+        const succeeded = resolveFireChargeProgress(missed.progress, true, 6);
+        expect(succeeded.reset).toBe(false);
+        expect(succeeded.progress.percent).toBe(100);
+    });
+
     it('grows the requirements when bonus shots extend the attempt', () => {
         // Budget 33 → required 11; +3 rewarded-ad bonus shots → 36 → 12.
         let state = emptyFireChargeProgress(33);

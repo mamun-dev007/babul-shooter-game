@@ -17,9 +17,11 @@ export let MAP_WIDTH = 540;
 /**
  * Vertical step between neighbouring nodes.
  *
- * 70px keeps the ten-node band (9 × 70 = 630px) inside the 634px viewport at
- * every scroll position — the map never shows more than ten node centres at
- * once, and pagination still centres a clean page of ten.
+ * Sized from the visible map viewport (height / 9) so about ten node
+ * centres fit on screen at a time, clamped to 60–90px: the 60px floor
+ * keeps the 52px buttons from overlapping on short screens, while the
+ * 90px cap still keeps ten levels inside tall viewports. At the 540×960
+ * design size this is 70px (9 × 70 = 630px inside the 634px viewport).
  */
 export let MAP_NODE_SPACING = 70;
 export const MAP_TOP_PAD = 90;
@@ -39,7 +41,7 @@ export const configureLevelMapLayout = (
     MAP_WIDTH = Math.max(320, Math.round(width));
     MAP_PATH_CENTER = MAP_WIDTH / 2;
     MAP_PATH_AMPLITUDE = Math.max(72, Math.min(180, (MAP_WIDTH - 70) / 2));
-    MAP_NODE_SPACING = Math.max(44, Math.min(70, viewportHeight / 9));
+    MAP_NODE_SPACING = Math.max(60, Math.min(90, Math.floor(viewportHeight / 9)));
 };
 
 export type MapNodeTint = 'blue' | 'purple' | 'green' | 'gold';
@@ -178,6 +180,27 @@ export const levelMapPageScroll = (
     return mapScrollBounds(nodes, viewTop, viewBottom).clamp(midView - midBand);
 };
 
+/**
+ * Scroll offset (mapLayer.y) that puts the exact `index` node's centre at
+ * the vertical centre of the visible map viewport. Intentionally
+ * unclamped: the first/last levels centre exactly, leaving fixed
+ * background beyond the map edge, while drag/wheel scrolling stays
+ * clamped by mapScrollBounds. Pure, so scene and tests share the math.
+ */
+export const levelMapCenterScroll = (
+    index: number,
+    count: number,
+    viewTop: number,
+    viewBottom: number
+): number => {
+    const nodes = Math.max(1, Math.floor(count));
+    const safeIndex = Math.max(0, Math.min(nodes - 1, Math.floor(index)));
+    const midView = (viewTop + viewBottom) / 2;
+    const nodeY = levelMapNodePosition(safeIndex, nodes).y;
+
+    return midView - nodeY;
+};
+
 export interface MapScrollBounds {
     readonly min: number;
     readonly max: number;
@@ -200,3 +223,10 @@ export const mapScrollBounds = (
         clamp: (value: number): number => Math.max(min, Math.min(max, value)),
     };
 };
+
+
+
+
+
+
+

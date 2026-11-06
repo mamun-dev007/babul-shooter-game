@@ -2,7 +2,7 @@ import { Scene } from 'phaser';
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { loadProgress, toggleMusic, toggleSound } from '../utils/storage';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
-import { fadeInScene, goToScene } from './transitions';
+import { fadeInScene, goToScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { drawVectorIcon, type VectorIcon } from '../../ui/vectorIcons';
 import { attachRelayout, menuCoinX, menuPlayY, menuSettingsY, menuUtilityY } from '../layout';
@@ -92,13 +92,18 @@ export class MenuScene extends Scene {
             .setInteractive({ useHandCursor: true });
         container.add(hit);
         addPressFx(this, hit, container, { hoverScale: 1.06, pressScale: 0.94 });
-        hit.on('pointerdown', () => gameAudio.playSfx('click'));
+        hit.on('pointerdown', () => {
+            if (this.transitioning) return;
+            this.transitioning = true;
+            gameAudio.playSfx('click');
+            goToScene(this, 'CoinStoreScene', { returnTo: 'MenuScene' }, 180);
+        });
     }
 
     private createPlayButton(): void {
         this.createPillButton(GAME_WIDTH / 2, menuPlayY(), 258, 72, 'PLAY', 'play', () => {
-            goToScene(this, 'LevelSelectionScene', undefined, 200);
-        });
+            goToSceneInstant(this, 'LevelSelectionScene', { instant: true });
+        }, true);
     }
 
     private createSettingsButton(): void {
@@ -130,7 +135,8 @@ export class MenuScene extends Scene {
         height: number,
         labelText: string,
         icon: VectorIcon,
-        action: () => void
+        action: () => void,
+        instant = false
     ): void {
         const radius = height / 2;
         const shadow = this.add.graphics().setDepth(20);
@@ -178,10 +184,20 @@ export class MenuScene extends Scene {
         hit.on('pointerdown', () => {
             if (this.transitioning) return;
             this.transitioning = true;
+            if (instant) {
+                // No scale tween or delay — navigate straight away.
+                action();
+                return;
+            }
             this.tweens.add({ targets: [button, shadow, label, iconGraphics], scaleX: 0.95, scaleY: 0.95, duration: 70, yoyo: true });
             this.time.delayedCall(80, () => action());
         });
-        addPressFx(this, hit, label, { hoverScale: 1.04, pressScale: 0.96 });
+        if (instant) {
+            // Instant navigation has no press-scale animation either.
+            addPressFx(this, hit, label, { hoverScale: 1, pressScale: 1 });
+        } else {
+            addPressFx(this, hit, label, { hoverScale: 1.04, pressScale: 0.96 });
+        }
     }
 
     private createRoundButton(

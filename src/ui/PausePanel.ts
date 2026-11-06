@@ -1,5 +1,6 @@
 import { FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../game/config';
 import { gameAudio } from '../game/audio/GameAudio';
+import { acquireModalInputLock, releaseModalInputLock } from '../game/input/modalInputLock';
 import { addPressFx } from './uiFx';
 import { drawVectorIcon, isVectorIcon, type VectorIcon } from './vectorIcons';
 import { uiFitScale } from '../game/responsive';
@@ -14,6 +15,7 @@ export interface PausePanelCallbacks {
 }
 
 const RED = { top: 0xe05241, bottom: 0x9c2a1e, rim: 0x6f1c14, highlight: 0xffffff, border: 0xffd2c4 };
+const PAUSE_LOCK_ID = 'pause';
 
 export class PausePanel {
     private readonly container: Phaser.GameObjects.Container;
@@ -22,6 +24,9 @@ export class PausePanel {
     private entranceFrame = 0;
 
     constructor(scene: Phaser.Scene, callbacks: PausePanelCallbacks) {
+        // Modal input lock: gameplay stays disabled for as long as this
+        // popup is visible (AimController checks the shared lock).
+        acquireModalInputLock(PAUSE_LOCK_ID);
         this.container = scene.add
             .container(GAME_WIDTH / 2, GAME_HEIGHT / 2)
             .setDepth(200)
@@ -30,7 +35,9 @@ export class PausePanel {
         const dim = scene.add
             .rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x07152a, 0.66)
             .setInteractive();
-        dim.on('pointerdown', () => undefined);
+        dim.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
+        });
 
         // Compact blue rounded popup with a soft drop shadow.
         const shadow = scene.add.graphics();
@@ -121,6 +128,7 @@ export class PausePanel {
     }
 
     destroy(): void {
+        releaseModalInputLock(PAUSE_LOCK_ID);
         cancelAnimationFrame(this.entranceFrame);
         this.container.destroy(true);
     }
@@ -155,7 +163,8 @@ export class PausePanel {
             .circle(0, 0, 21, 0xffffff, 0.001)
             .setInteractive({ useHandCursor: true });
 
-        hit.on('pointerdown', () => {
+        hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
             gameAudio.playSfx('click');
             onClose();
         });
@@ -226,7 +235,8 @@ export class PausePanel {
             .rectangle(0, 0, width, height, 0xffffff, 0.001)
             .setInteractive({ useHandCursor: true });
 
-        hit.on('pointerdown', () => {
+        hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
             gameAudio.playSfx('click');
             onPress();
         });

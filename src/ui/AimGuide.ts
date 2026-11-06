@@ -32,10 +32,13 @@ export class AimGuide {
     private visible = false;
     private lastAngle: number | null = null;
     private lastTexture: string | null = null;
+    private lastMode: 'normal' | 'fire' | 'bomb' = 'normal';
     /** Bubbles the predicted shot would destroy through a match. */
     private targets: Bubble[] = [];
     private fireMode = false;
     private fireTargetsProvider: ((impact: Point) => Bubble[]) | null = null;
+    private bombMode = false;
+    private bombTargetsProvider: ((impact: Point) => Bubble[]) | null = null;
 
     constructor(scene: Phaser.Scene, shooter: Shooter, collision: CollisionSystem) {
         this.shooter = shooter;
@@ -56,16 +59,18 @@ export class AimGuide {
         this.visible = true;
 
         const angle = this.shooter.getAimAngle();
-        const texture = bubbleTexture(this.shooter.currentColor);
+        const mode = this.bombMode ? 'bomb' : this.fireMode ? 'fire' : 'normal';
+        const texture = this.bombMode ? 'powerup-bomb' : this.fireMode ? 'icon-fire' : bubbleTexture(this.shooter.currentColor);
 
         // The scene calls show() every frame. Prediction walks the whole board
         // and allocates a path, so skip it unless the shot has actually
         // changed. Hiding the guide invalidates the cache, which also covers
         // board edits that happen while a bubble is in flight. The glow layer
         // re-pulses every frame so its lighting animation never stalls.
-        if (!wasVisible || angle !== this.lastAngle || texture !== this.lastTexture) {
+        if (!wasVisible || angle !== this.lastAngle || texture !== this.lastTexture || mode !== this.lastMode) {
             this.lastAngle = angle;
             this.lastTexture = texture;
+            this.lastMode = mode;
 
             const muzzle = this.shooter.getMuzzlePosition();
             const points = this.collision.predict(muzzle, angle);
@@ -85,6 +90,7 @@ export class AimGuide {
         this.visible = false;
         this.lastAngle = null;
         this.lastTexture = null;
+        this.lastMode = 'normal';
         this.graphics.clear();
         this.glow.clear();
         this.ghost.setVisible(false);
@@ -98,13 +104,13 @@ export class AimGuide {
     }
 
     /**
-     * Recomputes the highlighted set: the bubbles the loaded colour's shot
-     * would actually destroy along this trajectory. Runs the destruction
-     * chain live shooting uses — same march, same snap resolution, same ≥3
-     * colour-match rule — without mutating the board, so the glow can never
-     * disagree with the shot's real outcome.
+     * Recomputes the highlighted set for the current mode.
      */
     private refreshTargets(muzzle: Point, angle: number, points: Point[]): void {
+        if (this.bombMode && this.bombTargetsProvider) {
+            this.targets = this.bombTargetsProvider(points[points.length - 1] ?? muzzle);
+            return;
+        }
         if (this.fireMode && this.fireTargetsProvider) {
             this.targets = this.fireTargetsProvider(points[points.length - 1] ?? muzzle);
             return;
@@ -135,6 +141,15 @@ export class AimGuide {
             // The wave slightly grows the outermost ring and brightens the
             // inner fills; the bubble artwork itself is never touched.
             const ringPad = 1.5 + wave * 2.5;
+            if (this.bombMode) {
+                this.glow.fillStyle(0xff7a2a, 0.12 + wave * 0.12);
+                this.glow.fillCircle(bubble.x, bubble.y, BUBBLE_RADIUS + ringPad + 7);
+                this.glow.fillStyle(0xffd27a, 0.2 + wave * 0.16);
+                this.glow.fillCircle(bubble.x, bubble.y, BUBBLE_RADIUS + ringPad + 3);
+                this.glow.lineStyle(2, 0xffb347, 0.82);
+                this.glow.strokeCircle(bubble.x, bubble.y, BUBBLE_RADIUS + ringPad);
+                continue;
+            }
             if (this.fireMode) {
                 this.glow.fillStyle(0xff3d14, 0.14 + wave * 0.14);
                 this.glow.fillCircle(bubble.x, bubble.y, BUBBLE_RADIUS + ringPad + 7);
@@ -162,13 +177,21 @@ export class AimGuide {
             return;
         }
 
-        // The dots are always drawn in the exact colour of the bubble that
-        // will launch: the palette is sampled from the loaded bubble's colour
-        // on every redraw. The show() cache keys on that colour, so a swap,
-        // shot or level change redraws with the new palette immediately.
-        const palette = this.fireMode
-            ? { halo: 0xff3d14, dot: 0xff8a1f, highlight: 0xfff1a8, impactFill: 0xff8a1f, impactStroke: 0xfff1a8 }
-            : trajectoryPalette(this.shooter.currentColor);
+        const bombPalette = {
+            halo: 0xff7a2a,
+            dot: 0xffb347,
+            highlight: 0xfff0c8,
+            impactFill: 0xff8a1f,
+            impactStroke: 0xffe0a0,
+        };
+        const firePalette = {
+            halo: 0xff3d14,
+            dot: 0xff8a1f,
+            highlight: 0xfff1a8,
+            impactFill: 0xff8a1f,
+            impactStroke: 0xfff1a8,
+        };
+        const palette = this.bombMode ? bombPalette : this.fireMode ? firePalette : trajectoryPalette(this.shooter.currentColor);
 
         for (let index = 0; index < points.length - 1; index += 2) {
             const point = points[index];
@@ -183,12 +206,12 @@ export class AimGuide {
 
         const impact = points[points.length - 1];
 
-        this.graphics.fillStyle(palette.impactFill, 0.12);
+        this.graphics.fillStyle(palette.impactFill, 0.14);
         this.graphics.fillCircle(impact.x, impact.y, BUBBLE_RADIUS - 2);
-        this.graphics.lineStyle(2, palette.impactStroke, 0.68);
+        this.graphics.lineStyle(2, palette.impactStroke, 0.72);
         this.graphics.strokeCircle(impact.x, impact.y, BUBBLE_RADIUS - 2);
 
-        const texture = this.fireMode ? 'icon-fire' : bubbleTexture(this.shooter.currentColor);
+        const texture = this.bombMode ? 'powerup-bomb' : this.fireMode ? 'icon-fire' : bubbleTexture(this.shooter.currentColor);
 
         if (this.ghost.texture.key !== texture) {
             this.ghost.setTexture(texture);
@@ -201,8 +224,25 @@ export class AimGuide {
     setFireMode(active: boolean, targetsProvider: ((impact: Point) => Bubble[]) | null = null): void {
         this.fireMode = active;
         this.fireTargetsProvider = targetsProvider;
+        if (active) {
+            this.bombMode = false;
+            this.bombTargetsProvider = null;
+        }
         this.lastAngle = null;
         this.lastTexture = null;
+        this.lastMode = active ? 'fire' : 'normal';
+    }
+
+    setBombMode(active: boolean, targetsProvider: ((impact: Point) => Bubble[]) | null = null): void {
+        this.bombMode = active;
+        this.bombTargetsProvider = targetsProvider;
+        if (active) {
+            this.fireMode = false;
+            this.fireTargetsProvider = null;
+        }
+        this.lastAngle = null;
+        this.lastTexture = null;
+        this.lastMode = active ? 'bomb' : 'normal';
     }
 
 }

@@ -1,4 +1,4 @@
-import { FONT, FONT_DISPLAY, GAME_WIDTH } from '../game/config';
+import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../game/config';
 import { addPressFx } from './uiFx';
 
 export interface HudCallbacks {
@@ -7,12 +7,17 @@ export interface HudCallbacks {
 }
 
 export type PowerUpId = 'bomb' | 'colorChanger' | 'lightning' | 'fireball';
+export type PlusButtonId = 'bomb' | 'colorChanger' | 'fireball';
 
 import {
     CANVAS_TOP_ANCHOR,
     levelX,
     NOTICE_X,
     NOTICE_Y,
+    PLUS_BUTTON_HIT_RADIUS,
+    PLUS_BUTTON_RADIUS,
+    PLUS_BUTTON_XS,
+    PLUS_BUTTON_Y,
     PROGRESS_HEIGHT,
     PROGRESS_WIDTH,
     PROGRESS_X,
@@ -27,12 +32,22 @@ import {
 } from './hudAnchors';
 
 const PAUSE_RADIUS = 25;
+const POWER_BUTTON_RADIUS = 27;
 
 const POWER_UP_BUTTONS = [
     { id: 'bomb', key: 'powerup-bomb', label: 'BOMB' },
     { id: 'colorChanger', key: 'powerup-color', label: 'COLOR' },
     { id: 'fireball', key: 'icon-fire', label: 'FIREBALL' },
 ] as const;
+
+interface LiquidFillState {
+    target: number;
+    display: number;
+    phase: number;
+    readyGlow: number;
+    tween: Phaser.Tweens.Tween | null;
+    readyTween: Phaser.Tweens.Tween | null;
+}
 
 export class HUD {
     private readonly scene: Phaser.Scene;
@@ -50,12 +65,34 @@ export class HUD {
     private readonly pauseButton: Phaser.GameObjects.Container;
     private readonly pauseIcon: Phaser.GameObjects.Image;
     private readonly powerUpButtons = new Map<PowerUpId, Phaser.GameObjects.Container>();
-    /** Fire Power charge ring + percent label, on the fireball button only. */
-    private fireRing: Phaser.GameObjects.Graphics | null = null;
+    private readonly powerUpHits = new Map<PowerUpId, Phaser.GameObjects.Arc>();
+    private readonly powerUpIcons = new Map<PowerUpId, Phaser.GameObjects.Image>();
+    private readonly powerUpCards = new Map<PowerUpId, Phaser.GameObjects.Graphics>();
+    /**
+     * Visual-only plus badges on the upper-right edge of the bomb, color
+     * and fire buttons (~50% inside, ~50% outside). All three share the
+     * exact same Bomb-badge design via createPlusButton. No purchase,
+     * ad, reward or extra-charge behaviour is wired yet — the buttons are
+     * interactive only for press feedback and aim filtering. Stored so the
+     * future hook can attach without re-laying out the HUD.
+     */
+    private readonly plusButtons = new Map<PlusButtonId, Phaser.GameObjects.Container>();
+    private readonly plusHits = new Map<PlusButtonId, Phaser.GameObjects.Arc>();
+    private readonly fireLiquid = this.createLiquidState();
+    private readonly bombLiquid = this.createLiquidState();
+    private fireLiquidGraphics: Phaser.GameObjects.Graphics | null = null;
+    private bombLiquidGraphics: Phaser.GameObjects.Graphics | null = null;
+    
+    
+    private fireLiquidMaskShape: Phaser.GameObjects.Graphics | null = null;
+    private bombLiquidMaskShape: Phaser.GameObjects.Graphics | null = null;
     private fireChargeLabel: Phaser.GameObjects.Text | null = null;
-    /** Live charge percent 0–100 (100 = fully charged, button usable). */
-    private fireChargePercent = 0;
-    private fireChargeTween: Phaser.Tweens.Tween | null = null;
+    private bombStatusLabel: Phaser.GameObjects.Text | null = null;
+    private bombAvailable = false;
+    private bombActive = false;
+    private readonly onUpdate = (_time: number, delta: number): void => {
+        this.animateLiquid(delta);
+    };
 
     private score = 0;
     private targetScore = 0;
@@ -135,40 +172,41 @@ export class HUD {
             const centerX = TOOLBAR_BUTTON_XS[index];
             const button = scene.add.container(centerX, TOOLBAR_BUTTON_Y + 1);
             const card = scene.add.graphics();
-            const powerStyles = {
-                bomb: { outer: 0xd92f4d, middle: 0xff6b5d, inner: 0xffa04f, border: 0xffd4a1 },
-                colorChanger: { outer: 0x6754d9, middle: 0x9b63e9, inner: 0xd68cff, border: 0xe8d1ff },
-                fireball: { outer: 0xd92f20, middle: 0xff5c1f, inner: 0xffb52d, border: 0xffcf69 },
-            } as const;
-            const style = powerStyles[item.id];
-            card.fillStyle(style.outer, 0.96);
-            card.fillCircle(0, 0, 27);
-            card.fillStyle(style.middle, 0.98);
-            card.fillCircle(0, 1, 23);
-            card.fillStyle(style.inner, 0.92);
-            card.fillCircle(-2, 4, 17);
-            card.fillStyle(0xffffff, 0.14);
-            card.fillCircle(-7, -8, 9);
-            card.lineStyle(3, style.border, 0.98);
-            card.strokeCircle(0, 0, 27);
-            card.lineStyle(1, 0xffffff, 0.75);
-            card.strokeCircle(0, 0, 22);
+            this.drawPowerCard(card, item.id, false);
+
+            const liquid = (item.id === 'fireball' || item.id === 'bomb') ? scene.add.graphics() : null;
+            if (liquid) {
+                const maskShape = scene.make.graphics({ x: 0, y: 0 }, false);
+                maskShape.setPosition(centerX, TOOLBAR_BUTTON_Y + 1);
+                maskShape.fillStyle(0xffffff, 1);
+                maskShape.fillCircle(0, 0, POWER_BUTTON_RADIUS - 1);
+                const mask = maskShape.createGeometryMask();
+                liquid.setMask(mask);
+                if (item.id === 'fireball') {
+                    this.fireLiquidGraphics = liquid;
+                    
+                    this.fireLiquidMaskShape = maskShape;
+                } else {
+                    this.bombLiquidGraphics = liquid;
+                    
+                    this.bombLiquidMaskShape = maskShape;
+                }
+            }
 
             const icon = scene.add
                 .image(0, 0, item.key)
-                .setDisplaySize(48, 48);
+                .setDisplaySize(48, 48)
+                .setDepth(2);
 
             const hitArea = scene.add
                 .circle(0, 0, 32, 0xffffff, 0.001)
-                .setInteractive({ useHandCursor: true });
+                .setInteractive({ useHandCursor: true })
+                .setDepth(4);
 
-            const icons: Phaser.GameObjects.GameObject[] = [card, icon, hitArea];
+            const contents: Phaser.GameObjects.GameObject[] = [card];
+            if (liquid) contents.push(liquid);
 
-            // The Fire Power button carries its charge ring + percent readout
-            // (no x1/x2/x3 labels anywhere). It starts disabled at 0% and
-            // only lights up fully charged.
             if (item.id === 'fireball') {
-                this.fireRing = scene.add.graphics();
                 this.fireChargeLabel = scene.add
                     .text(0, 21, '0%', {
                         fontFamily: FONT_DISPLAY,
@@ -177,8 +215,24 @@ export class HUD {
                         stroke: '#123a35',
                         strokeThickness: 3,
                     })
-                    .setOrigin(0.5);
-                icons.push(this.fireRing, this.fireChargeLabel);
+                    .setOrigin(0.5)
+                    .setDepth(3);
+                contents.push(icon, this.fireChargeLabel, hitArea);
+            } else if (item.id === 'bomb') {
+                this.bombStatusLabel = scene.add
+                    .text(0, 24, 'OFF', {
+                        fontFamily: FONT_DISPLAY,
+                        fontSize: '8px',
+                        color: '#f7e8d0',
+                        stroke: '#123a35',
+                        strokeThickness: 3,
+                    })
+                    .setOrigin(0.5)
+                    .setAlpha(0.72)
+                    .setDepth(3);
+                contents.push(icon, this.bombStatusLabel, hitArea);
+            } else {
+                contents.push(icon, hitArea);
             }
 
             hitArea.on('pointerdown', () => {
@@ -187,16 +241,40 @@ export class HUD {
                 if (item.id === 'colorChanger' && this.colorAdActive) {
                     return;
                 }
+                if (item.id === 'bomb' && !this.bombAvailable && !this.bombActive) {
+                    return;
+                }
                 callbacks.onPowerUp(item.id);
             });
             addPressFx(scene, hitArea, button, { hoverScale: 1.04, pressScale: 0.94 });
 
+            this.powerUpHits.set(item.id, hitArea);
+            this.powerUpIcons.set(item.id, icon);
+            this.powerUpCards.set(item.id, card);
+
             // No on-button multiplier badges (x1/x2/x3): the buttons show
-            // only their icons; the fireball's availability lives in the
-            // charge ring handled by setFireChargeProgress.
+            // only their icons; progress is shown as liquid fill.
             this.powerUpButtons.set(item.id, button);
-            button.add(icons);
+            button.add(contents);
             toolbarItems.push(button);
+        });
+
+        // Plus badges sit on the upper-right edge of the bomb, color and
+        // fire buttons (~50% inside the power circle, ~50% outside) at
+        // (powerX + 18.5, powerY - 18.5), all identical to the Bomb badge.
+        // They are created AFTER the power buttons so the full plus circle
+        // renders on top and stays clearly visible over the overlap;
+        // derived from the toolbar anchors, so they reflow on every
+        // viewport size and stay inside the screen.
+        const plusTargets = [
+            { id: 'bomb' as const, x: PLUS_BUTTON_XS[0], label: 'Add Bomb' },
+            { id: 'colorChanger' as const, x: PLUS_BUTTON_XS[1], label: 'Add Color' },
+            { id: 'fireball' as const, x: PLUS_BUTTON_XS[2], label: 'Add Fire' },
+        ];
+        plusTargets.forEach((target) => {
+            const plus = this.createPlusButton(target.x, PLUS_BUTTON_Y, target.id, target.label);
+            this.plusButtons.set(target.id, plus);
+            toolbarItems.push(plus);
         });
 
         this.pauseButton = this.createIconButton(
@@ -271,6 +349,9 @@ export class HUD {
         });
 
         this.updateProgress();
+        scene.events.on('update', this.onUpdate, this);
+        this.setBombState(false, false);
+        this.setFireChargeProgress(0);
     }
 
     setScore(score: number): void {
@@ -405,6 +486,7 @@ export class HUD {
     }
 
     setActivePowerUp(powerUp: PowerUpId | null): void {
+        this.bombActive = powerUp === 'bomb';
         this.powerUpButtons.forEach((button, id) => {
             this.scene.tweens.killTweensOf(button);
             button.setScale(id === powerUp ? 1.16 : 1);
@@ -412,14 +494,51 @@ export class HUD {
                 this.scene.tweens.add({ targets: button, scale: 1.22, duration: 280, yoyo: true, repeat: -1 });
             }
         });
+        this.refreshBombVisuals();
+    }
+
+    setBombState(available: boolean, active = this.bombActive): void {
+        this.bombAvailable = available;
+        this.bombActive = available ? active : false;
+        this.refreshBombVisuals();
+    }
+
+    private refreshBombVisuals(): void {
+        const button = this.powerUpButtons.get('bomb');
+        const hit = this.powerUpHits.get('bomb');
+        const icon = this.powerUpIcons.get('bomb');
+        if (!button || !hit || !icon) {
+            return;
+        }
+
+        const enabled = this.bombAvailable || this.bombActive;
+        if (enabled) {
+            hit.setInteractive({ useHandCursor: true });
+        } else {
+            hit.disableInteractive();
+        }
+
+        button.setAlpha(1);
+        icon.setAlpha(enabled ? 1 : 0.72);
+        icon.setTint(enabled ? 0xffffff : 0xeceff3);
+
+        if (this.bombStatusLabel) {
+            this.bombStatusLabel.setText(this.bombActive ? 'READY' : enabled ? 'BOMB' : 'OFF');
+            this.bombStatusLabel.setAlpha(enabled ? 1 : 0.72);
+            this.bombStatusLabel.setColor(this.bombActive ? '#fff3c2' : enabled ? '#ffffff' : '#eef3f8');
+        }
+
+        this.setLiquidTarget(this.bombLiquid, enabled ? 100 : 0, enabled ? 360 : 420);
+        if (enabled) {
+            this.startReadyGlow(this.bombLiquid);
+        } else {
+            this.stopReadyGlow(this.bombLiquid);
+        }
     }
 
     /**
-     * Fire Power charge state. `percent` 0–99 keeps the button visually
-     * disabled (dimmed, no pulse); 100 switches it to the ready look — full
-     * brightness, green charge ring and the gentle ready pulse. The ring and
-     * percent label animate smoothly between values; icons, colours, sizes
-     * and positions of the button itself are untouched.
+     * Fire Power charge state follows the actual Fire charging system.
+     * Liquid fills 0–99%; 100% is fully filled/ready and empties smoothly when consumed.
      */
     setFireChargeProgress(percent: number): void {
         const target = Math.max(0, Math.min(100, percent));
@@ -427,7 +546,7 @@ export class HUD {
         const button = this.powerUpButtons.get('fireball');
 
         if (button) {
-            button.setAlpha(ready ? 1 : 0.62);
+            button.setAlpha(1);
             this.scene.tweens.killTweensOf(button);
 
             if (ready) {
@@ -437,59 +556,24 @@ export class HUD {
             }
         }
 
-        this.fireChargeTween?.remove();
-        this.fireChargeTween = null;
-
-        const displayed = { value: this.fireChargePercent };
-        this.fireChargeTween = this.scene.tweens.add({
-            targets: displayed,
-            value: target,
-            duration: 320,
-            ease: 'Linear',
-            onUpdate: () => {
-                this.drawFireRing(displayed.value);
-                this.fireChargeLabel?.setText(`${Math.floor(displayed.value)}%`);
-            },
-            onComplete: () => {
-                this.drawFireRing(target);
-                this.fireChargeLabel?.setText(`${Math.floor(target)}%`);
-                this.fireChargePercent = target;
-            },
-        });
-
-        if (target === this.fireChargePercent) {
-            this.drawFireRing(target);
-            this.fireChargeLabel?.setText(`${Math.floor(target)}%`);
+        this.setLiquidTarget(this.fireLiquid, target, 320);
+        if (ready) {
+            this.startReadyGlow(this.fireLiquid);
+        } else {
+            this.stopReadyGlow(this.fireLiquid);
         }
-    }
-
-    /** Redraws the fire charge ring for the given 0–100 percent value. */
-    private drawFireRing(percent: number): void {
-        if (!this.fireRing) {
-            return;
-        }
-
-        const value = Math.max(0, Math.min(100, percent));
-        this.fireRing.clear();
-
-        if (value <= 0) {
-            return;
-        }
-
-        const ready = value >= 99.5;
-        // Faint track behind the charged arc, then the arc itself: it starts
-        // at the button's top and sweeps clockwise with the charge.
-        this.fireRing.lineStyle(4.5, 0x123a35, 0.55);
-        this.fireRing.strokeCircle(0, 0, 30);
-        this.fireRing.lineStyle(4.5, ready ? 0x9dff5e : 0xffb52d, 0.95);
-        this.fireRing.beginPath();
-        this.fireRing.arc(0, 0, 30, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (value / 100));
-        this.fireRing.strokePath();
     }
 
     destroy(): void {
+        this.scene.events.off('update', this.onUpdate, this);
         this.scene.tweens.killTweensOf(this.scoreValue);
         this.scene.tweens.killTweensOf(this.shotsValue);
+        this.fireLiquid.tween?.remove();
+        this.fireLiquid.readyTween?.remove();
+        this.bombLiquid.tween?.remove();
+        this.bombLiquid.readyTween?.remove();
+        this.fireLiquidMaskShape?.destroy();
+        this.bombLiquidMaskShape?.destroy();
         this.extraBallsToast?.destroy(true);
         this.container.destroy(true);
     }
@@ -577,6 +661,367 @@ export class HUD {
         button.setData('label', label);
 
         return button;
+    }
+
+    /** Future hook point for the visual-only plus badges. */
+    getPlusButton(id: PlusButtonId): Phaser.GameObjects.Container | undefined {
+        return this.plusButtons.get(id);
+    }
+
+    /**
+     * Scaled duplicate of the middle Color Change button: identical
+     * background layers, gradient, rings, highlight and overall styling,
+     * with only the icon replaced by a white plus. Interactive with a
+     * 44px hit circle for touch, but the press is intentionally a no-op
+     * — no purchase/ad/reward logic is wired. The original Color Change
+     * button itself is untouched.
+     */
+    private createPlusButton(
+        x: number,
+        y: number,
+        id: PlusButtonId,
+        label: string
+    ): Phaser.GameObjects.Container {
+        // Clamp so the touch target can never overflow outside the game
+        // screen at any viewport size (anchors already keep it inside;
+        // this is a defensive bound for narrow/wide layouts).
+        const clampedX = Math.min(
+            Math.max(x, PLUS_BUTTON_HIT_RADIUS + 2),
+            Math.max(PLUS_BUTTON_HIT_RADIUS + 2, GAME_WIDTH - PLUS_BUTTON_HIT_RADIUS - 2)
+        );
+        const clampedY = Math.min(
+            Math.max(y, PLUS_BUTTON_HIT_RADIUS + 2),
+            Math.max(PLUS_BUTTON_HIT_RADIUS + 2, GAME_HEIGHT - PLUS_BUTTON_HIT_RADIUS - 2)
+        );
+        const button = this.scene.add.container(clampedX, clampedY);
+        const graphics = this.scene.add.graphics().setDepth(1);
+
+        // Exact Color Change button card, scaled to the plus radius — same
+        // colors, gradient and borders, no new palette or style invented.
+        this.drawColorChangerCard(graphics, PLUS_BUTTON_RADIUS);
+        // Plus icon in place of the Color Change icon: the same white used
+        // for the button's rings/highlight, drawn as two rounded bars like
+        // the plus badge inside the Color Change artwork.
+        graphics.fillStyle(0xffffff, 1);
+        graphics.fillRoundedRect(-6, -1.5, 12, 3, 1.5);
+        graphics.fillRoundedRect(-1.5, -6, 3, 12, 1.5);
+
+        const hit = this.scene.add
+            .circle(0, 0, PLUS_BUTTON_HIT_RADIUS, 0xffffff, 0.001)
+            .setInteractive({ useHandCursor: true })
+            // Above the power buttons' hit depth (4) to match the visual
+            // layering: taps on the overlapping ~50% resolve to the plus
+            // badge that is drawn there. The power centre itself lies
+            // outside this circle, so power taps still work.
+            .setDepth(5);
+
+        // Visual only: press feedback comes from addPressFx; no callbacks.
+        hit.on('pointerdown', () => {
+            // Intentionally no purchase/ad/reward/charge action for now.
+        });
+        addPressFx(this.scene, hit, button, { hoverScale: 1.06, pressScale: 0.92 });
+
+        button.add([graphics, hit]);
+        button.setSize(PLUS_BUTTON_HIT_RADIUS * 2, PLUS_BUTTON_HIT_RADIUS * 2);
+        button.setData('label', label);
+        button.setData('plusButton', true);
+        button.setData('powerUp', id);
+        button.setData('plusButtonId', id);
+
+        this.plusHits.set(id, hit);
+        return button;
+    }
+
+    private createLiquidState(): LiquidFillState {
+        return { target: 0, display: 0, phase: Math.random() * Math.PI * 2, readyGlow: 0, tween: null, readyTween: null };
+    }
+
+    /**
+     * The Color Change button's card, parameterized by radius so the plus
+     * badges are an exact scaled duplicate of it. Every layer (outer
+     * 0x6754d9 disc, mid 0x9b63e9 disc, inner 0xd68cff disc, white
+     * highlight, 0xe8d1ff outer ring and white inner ring) uses the same
+     * colors, alphas and proportions — offsets and ring widths scale with
+     * the radius, so at POWER_BUTTON_RADIUS this draws exactly the
+     * original button and at PLUS_BUTTON_RADIUS it draws its smaller
+     * duplicate.
+     */
+    private drawColorChangerCard(card: Phaser.GameObjects.Graphics, radius: number): void {
+        const s = radius / POWER_BUTTON_RADIUS;
+        card.clear();
+        card.fillStyle(0x6754d9, 0.96);
+        card.fillCircle(0, 0, radius);
+        card.fillStyle(0x9b63e9, 0.98);
+        card.fillCircle(0, 1 * s, radius - 4 * s);
+        card.fillStyle(0xd68cff, 0.92);
+        card.fillCircle(-2 * s, 4 * s, radius - 10 * s);
+        card.fillStyle(0xffffff, 0.14);
+        card.fillCircle(-7 * s, -8 * s, 9 * s);
+        card.lineStyle(3 * s, 0xe8d1ff, 0.98);
+        card.strokeCircle(0, 0, radius);
+        card.lineStyle(1 * s, 0xffffff, 0.75);
+        card.strokeCircle(0, 0, radius - 5 * s);
+    }
+
+    private drawPowerCard(card: Phaser.GameObjects.Graphics, id: PowerUpId, active: boolean): void {
+        card.clear();
+        if (id === 'colorChanger') {
+            this.drawColorChangerCard(card, POWER_BUTTON_RADIUS);
+            return;
+        }
+
+        // Transparent container look: unfilled area stays pale/disabled.
+        card.fillStyle(active ? 0xf8fbff : 0xf3f6f9, active ? 0.34 : 0.92);
+        card.fillCircle(0, 0, POWER_BUTTON_RADIUS);
+        card.lineStyle(active ? 2.5 : 2, active ? 0xffffff : 0xdbe4ec, active ? 0.92 : 0.95);
+        card.strokeCircle(0, 0, POWER_BUTTON_RADIUS);
+        card.lineStyle(1, 0xffffff, active ? 0.36 : 0.7);
+        card.strokeCircle(0, 0, POWER_BUTTON_RADIUS - 4);
+        card.fillStyle(0xffffff, active ? 0.08 : 0.22);
+        card.fillCircle(-7, -10, 8);
+    }
+
+    private setLiquidTarget(state: LiquidFillState, target: number, duration = 320): void {
+        const next = Math.max(0, Math.min(100, target));
+        if (Math.abs(state.target - next) < 0.01 && Math.abs(state.display - next) < 0.01) {
+            state.target = next;
+            state.display = next;
+            return;
+        }
+        state.target = next;
+        state.tween?.remove();
+        state.tween = this.scene.tweens.add({
+            targets: state,
+            display: next,
+            duration,
+            ease: 'Sine.easeInOut',
+        });
+    }
+
+    private startReadyGlow(state: LiquidFillState): void {
+        if (state.readyTween) return;
+        state.readyTween = this.scene.tweens.add({
+            targets: state,
+            readyGlow: 1,
+            duration: 520,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+        });
+    }
+
+    private stopReadyGlow(state: LiquidFillState): void {
+        state.readyTween?.remove();
+        state.readyTween = null;
+        state.readyGlow = 0;
+    }
+
+    private animateLiquid(delta: number): void {
+        const dt = Math.min(60, Math.max(0, delta));
+        this.fireLiquid.phase += dt * 0.0032;
+        this.bombLiquid.phase += dt * 0.0028;
+
+        const fireCard = this.powerUpCards.get('fireball');
+        if (fireCard) this.drawPowerCard(fireCard, 'fireball', this.fireLiquid.display > 0.5);
+        const bombCard = this.powerUpCards.get('bomb');
+        if (bombCard) this.drawPowerCard(bombCard, 'bomb', this.bombLiquid.display > 0.5 || this.bombAvailable || this.bombActive);
+
+        this.drawLiquid(this.fireLiquidGraphics, this.fireLiquid, 'fire');
+        this.drawLiquid(this.bombLiquidGraphics, this.bombLiquid, 'bomb');
+
+        const fireReady = this.fireLiquid.display >= 99.5;
+        this.powerUpIcons.get('fireball')?.setAlpha(fireReady ? 1 : this.fireLiquid.display > 0 ? 0.92 : 0.72);
+        this.powerUpIcons.get('fireball')?.setTint(fireReady ? 0xffffff : this.fireLiquid.display > 0 ? 0xfff5ea : 0xeceff3);
+        this.fireChargeLabel?.setText(`${Math.floor(this.fireLiquid.display)}%`);
+        this.fireChargeLabel?.setAlpha(this.fireLiquid.display > 0 ? 1 : 0.72);
+    }
+
+    private drawLiquid(
+        graphics: Phaser.GameObjects.Graphics | null,
+        state: LiquidFillState,
+        type: 'fire' | 'bomb'
+    ): void {
+        if (!graphics) return;
+        graphics.clear();
+
+        const percent = Math.max(0, Math.min(100, state.display));
+        if (percent <= 0.01 && type === 'bomb') return;
+
+        const radius = POWER_BUTTON_RADIUS - 2;
+        if (type === 'fire') {
+            this.drawFireSegmentFill(graphics, radius, percent, state);
+            return;
+        }
+
+        const fillHeight = (percent / 100) * radius * 2;
+        const surfaceY = radius - fillHeight;
+        const ready = percent >= 99.5;
+        const waveAmp = ready ? 1.5 : Math.max(1.1, 2.1 * (percent / 100));
+        const glow = ready ? 0.14 + state.readyGlow * 0.12 : 0;
+
+        this.drawWaveFill(graphics, radius, surfaceY, waveAmp, state.phase, 0xd92f4d, 0.92);
+        this.drawWaveFill(graphics, radius, surfaceY - 1.5, waveAmp * 0.82, state.phase + 0.8, 0xff6b5d, 0.9);
+        this.drawWaveFill(graphics, radius, surfaceY - 3.2, waveAmp * 0.64, state.phase + 1.7, 0xffa04f, 0.88);
+
+        graphics.lineStyle(2, 0xffffff, 0.28);
+        graphics.beginPath();
+        for (let x = -radius; x <= radius; x += 2) {
+            const yLimit = Math.sqrt(Math.max(0, radius * radius - x * x));
+            const y = surfaceY + Math.sin(x * 0.28 + state.phase) * waveAmp;
+            if (Math.abs(y) > yLimit) continue;
+            if (x === -radius) graphics.moveTo(x, y);
+            else graphics.lineTo(x, y);
+        }
+        graphics.strokePath();
+
+        for (let i = 0; i < 3; i++) {
+            const bx = Math.sin(state.phase * 0.8 + i * 1.37) * (radius * 0.45);
+            const rise = ((state.phase * 10 + i * 18) % (fillHeight + 10));
+            const by = radius - rise;
+            if (by < surfaceY + 2) continue;
+            if (bx * bx + by * by > (radius - 3) * (radius - 3)) continue;
+            graphics.fillStyle(0xffffff, 0.14);
+            graphics.fillCircle(bx, by, 1.4 + (i % 2) * 0.6);
+        }
+
+        if (glow > 0) {
+            graphics.fillStyle(0xffc46b, glow);
+            graphics.fillCircle(0, 0, radius);
+            graphics.lineStyle(2, 0xffffff, 0.35 + state.readyGlow * 0.25);
+            graphics.strokeCircle(0, 0, radius + 0.5);
+        }
+    }
+
+    private drawWaveFill(
+        graphics: Phaser.GameObjects.Graphics,
+        radius: number,
+        surfaceY: number,
+        amplitude: number,
+        phase: number,
+        color: number,
+        alpha: number
+    ): void {
+        graphics.fillStyle(color, alpha);
+        graphics.beginPath();
+        let started = false;
+        for (let x = -radius; x <= radius; x += 2) {
+            const yLimit = Math.sqrt(Math.max(0, radius * radius - x * x));
+            const waveY = Math.max(-yLimit, Math.min(yLimit, surfaceY + Math.sin(x * 0.24 + phase) * amplitude));
+            const y = Math.min(yLimit, waveY);
+            if (y >= yLimit) {
+                started = false;
+                continue;
+            }
+            if (!started) {
+                graphics.moveTo(x, yLimit);
+                graphics.lineTo(x, y);
+                started = true;
+            } else {
+                graphics.lineTo(x, y);
+            }
+        }
+        for (let x = radius; x >= -radius; x -= 2) {
+            const yLimit = Math.sqrt(Math.max(0, radius * radius - x * x));
+            const waveY = Math.max(-yLimit, Math.min(yLimit, surfaceY + Math.sin(x * 0.24 + phase) * amplitude));
+            if (waveY < yLimit) {
+                graphics.lineTo(x, yLimit);
+            }
+        }
+        graphics.closePath();
+        graphics.fillPath();
+    }
+
+    private drawFireSegmentFill(
+        graphics: Phaser.GameObjects.Graphics,
+        radius: number,
+        percent: number,
+        state: LiquidFillState
+    ): void {
+        const segments = 100;
+        const segmentHeight = (radius * 2) / segments;
+        const filledExact = Math.max(0, Math.min(segments, percent));
+        const fullyFilled = Math.floor(filledExact + 0.0001);
+        const partial = filledExact - fullyFilled;
+        const ready = percent >= 99.5;
+        const waveAmp = ready ? 1.1 : Math.max(0.6, 1.3 * (percent / 100));
+        const waveY = (x: number): number => Math.sin(x * 0.22 + state.phase) * waveAmp;
+
+        // Exact 100-segment colour fill: every segment is first the Disabled
+        // Button colour, then the charged 1% slices are painted with the
+        // original Fire Button colour. No glow effect is used for unfilled
+        // segments; the charged colour area therefore matches the charge %.
+        for (let i = 0; i < segments; i++) {
+            const yBottom = radius - i * segmentHeight;
+            const yTop = yBottom - segmentHeight;
+            this.fillSegmentClipped(
+                graphics,
+                radius,
+                yBottom,
+                yTop,
+                1,
+                0xf3f6f9,
+                1,
+                (x) => Math.min(yBottom, waveY(x) + yBottom - segmentHeight * 0.15)
+            );
+
+            let coverage = 0;
+            if (i < fullyFilled) coverage = 1;
+            else if (i === fullyFilled && partial > 0.001) coverage = partial;
+            if (coverage <= 0) {
+                continue;
+            }
+
+            // Original Fire Button colour for the charged portion.
+            this.fillSegmentClipped(graphics, radius, yBottom, yTop, coverage, 0xff5c1f, 1, waveY);
+        }
+
+        if (ready) {
+            // Ready state is the subtle button pulse in setFireChargeProgress;
+            // at 100% every segment is already the original Fire colour, so
+            // no overlay colour is added here.
+            graphics.lineStyle(2, 0xfff1c0, 0.3 + state.readyGlow * 0.35);
+            graphics.strokeCircle(0, 0, radius + 0.5);
+        }
+    }
+
+    private fillSegmentClipped(
+        graphics: Phaser.GameObjects.Graphics,
+        radius: number,
+        yBottom: number,
+        yTop: number,
+        coverage: number,
+        color: number,
+        alpha: number,
+        surface: (x: number) => number
+    ): void {
+        const clampedCoverage = Math.max(0, Math.min(1, coverage));
+        if (clampedCoverage <= 0) return;
+        graphics.fillStyle(color, alpha);
+        graphics.beginPath();
+        let started = false;
+        for (let x = -radius; x <= radius; x += 2) {
+            const yLimit = Math.sqrt(Math.max(0, radius * radius - x * x));
+            const bottom = Math.min(yLimit, yBottom);
+            const fillTop = yBottom - (yBottom - yTop) * clampedCoverage;
+            const top = Math.max(-yLimit, Math.max(yTop, Math.min(yBottom, Math.max(fillTop, surface(x)))));
+            if (top >= bottom) {
+                started = false;
+                continue;
+            }
+            if (!started) {
+                graphics.moveTo(x, bottom);
+                graphics.lineTo(x, top);
+                started = true;
+            } else {
+                graphics.lineTo(x, top);
+            }
+        }
+        for (let x = radius; x >= -radius; x -= 2) {
+            const yLimit = Math.sqrt(Math.max(0, radius * radius - x * x));
+            graphics.lineTo(x, Math.min(yLimit, yBottom));
+        }
+        graphics.closePath();
+        graphics.fillPath();
     }
 
 }

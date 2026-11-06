@@ -1,6 +1,7 @@
 import { Input, type Scene } from 'phaser';
 import type { Shooter } from '../objects/Shooter';
 import { aimBandBottomY, aimBandTopY } from '../layout';
+import { isModalInputLocked } from './modalInputLock';
 
 export interface AimControllerConfig {
     shooter: Shooter;
@@ -41,8 +42,15 @@ const KEY_CAPTURE = 'LEFT,RIGHT,A,D,SPACE,P';
  *   never create two armed presses or fire twice from one finger.
  * - A press that begins on an interactive UI object (HUD buttons, popups,
  *   shooter swap targets) is UX input and never arms a shot.
- * - `cancelPointerInput` swallows the in-flight release of the active press,
- *   so board-scroll gestures, pauses and bubble swaps can never end in a shot.
+ * - While any modal popup is open (`isModalInputLocked()`), all launcher
+ *   input is locked: presses, moves and releases are swallowed for that
+ *   pointer, so background shooting is impossible and popup clicks only
+ *   trigger their own actions.
+ * - `cancelPointerInput` swallows the in-flight release of every currently
+ *   held pointer. This covers the resume/close case, where the gameobject
+ *   handler closes the popup BEFORE the scene-level pointerdown for the
+ *   same gesture runs: the closing pointer is captured while it is still
+ *   down and can therefore neither arm nor fire after the popup closes.
  * - One release fires at most one bubble: the press latch clears before the
  *   fire callback runs, so duplicate `pointerup` deliveries are inert.
  */
@@ -52,8 +60,14 @@ export class AimController {
     private keys: AimKeys | null = null;
     /** Id of the pointer that pressed down inside the playfield, or null. */
     private pressedPointerId: number | null = null;
-    /** Id of a pointer whose release must be swallowed after a cancel. */
-    private swallowPointerId: number | null = null;
+    /**
+     * Ids of pointers whose gestures must be fully ignored (modal open,
+     * popup/UI press, or cancelled). A swallowed pointer can neither arm,
+     * aim, nor fire — including after the modal that caused the swallow
+     * closes while the finger/mouse is still held. Each id is cleared by
+     * its own pointerup.
+     */
+    private readonly swallowedPointerIds = new Set<number>();
 
     constructor(scene: Scene, config: AimControllerConfig) {
         this.scene = scene;
@@ -93,7 +107,7 @@ export class AimController {
             this.config.onPause();
         }
 
-        if (this.config.canAim()) {
+        if (this.config.canAim() && !isModalInputLocked()) {
             let direction = 0;
 
             if (this.keys.left.isDown || this.keys.a.isDown) {
@@ -109,7 +123,7 @@ export class AimController {
             }
         }
 
-        if (Input.Keyboard.JustDown(this.keys.space) && this.config.canFire()) {
+        if (Input.Keyboard.JustDown(this.keys.space) && this.config.canFire() && !isModalInputLocked()) {
             this.config.onFire();
         }
     }
@@ -121,23 +135,49 @@ export class AimController {
         this.scene.input.off('pointerupoutside', this.handlePointerUp, this);
         this.scene.input.keyboard?.removeCapture(KEY_CAPTURE);
         this.pressedPointerId = null;
-        this.swallowPointerId = null;
+        this.swallowedPointerIds.clear();
     }
 
     /**
-     * Disarms the active pointer press. The release of the disarmed press is
-     * swallowed so the gesture that triggered the cancel (board scroll start,
-     * pause, bubble swap) can never fire a bubble.
+     * Disarms all in-flight pointer input and swallows every currently held
+     * pointer. The release of a swallowed press is ignored, so board-scroll
+     * gestures, pauses, bubble swaps and — crucially — the popup button
+     * press that closes a modal can never end in a shot, even though the
+     * scene-level pointerdown for that same gesture runs after the popup
+     * has already closed. An explicit pointer id may be passed when the
+     * caller knows it (e.g. a popup button handler).
      */
-    cancelPointerInput(): void {
+    cancelPointerInput(pointerId?: number): void {
         if (this.pressedPointerId !== null) {
-            this.swallowPointerId = this.pressedPointerId;
+            this.swallowedPointerIds.add(this.pressedPointerId);
             this.pressedPointerId = null;
+        }
+
+        if (pointerId !== undefined) {
+            this.swallowedPointerIds.add(pointerId);
+            return;
+        }
+
+        // Capture every pointer that is physically down right now. On the
+        // resume/close path the closing pointer is down but not yet armed
+        // (its scene-level pointerdown has not run), so the armed-press
+        // case above alone cannot see it — the manager's pointer list can.
+        const pointers = this.scene.input.manager?.pointers;
+        if (Array.isArray(pointers)) {
+            pointers.forEach((pointer) => {
+                if (pointer?.isDown) {
+                    this.swallowedPointerIds.add(pointer.id);
+                }
+            });
         }
     }
 
     private handlePointerMove(pointer: Phaser.Input.Pointer): void {
-        if (!this.config.canAim() || !this.isPlayfieldPointer(pointer)) {
+        if (this.swallowedPointerIds.has(pointer.id)) {
+            return;
+        }
+
+        if (isModalInputLocked() || !this.config.canAim() || !this.isPlayfieldPointer(pointer)) {
             return;
         }
 
@@ -145,13 +185,29 @@ export class AimController {
     }
 
     private handlePointerDown(pointer: Phaser.Input.Pointer): void {
-        // A fresh press always re-evaluates cleanly: an armed press or a
-        // swallow latch from a previous interaction must not leak in.
+        // A fresh press always re-evaluates cleanly: an armed press from a
+        // previous interaction must not leak in. Swallowed pointers stay
+        // swallowed until their own release (see below).
         this.pressedPointerId = null;
+
+        // A pointer swallowed by a modal close / cancel must never arm,
+        // even though the popup it started on is already gone by the time
+        // this scene-level handler runs.
+        if (this.swallowedPointerIds.has(pointer.id)) {
+            return;
+        }
 
         // Only the primary button means "shoot" — right/middle clicks and
         // context-menu shortcuts never aim or fire.
         if (pointer.button !== 0) {
+            return;
+        }
+
+        // While any modal popup is open, launcher input is fully locked.
+        // The press is swallowed so its move/release stay inert even if
+        // the modal closes while the finger/mouse is still held.
+        if (isModalInputLocked() || !this.config.canAim()) {
+            this.swallowedPointerIds.add(pointer.id);
             return;
         }
 
@@ -160,10 +216,11 @@ export class AimController {
         // Phaser delivers these gameobject events before the scene-level
         // pointerdown, so this check also covers handlers that already ran.
         if (this.isOverInteractiveUi(pointer)) {
+            this.swallowedPointerIds.add(pointer.id);
             return;
         }
 
-        if (!this.config.canAim() || !this.isPlayfieldPointer(pointer)) {
+        if (!this.isPlayfieldPointer(pointer)) {
             return;
         }
 
@@ -172,10 +229,13 @@ export class AimController {
     }
 
     private handlePointerUp(pointer: Phaser.Input.Pointer): void {
-        // A cancelled press (scroll, pause, swap) releases silently exactly
-        // once — the latch clears on its first delivery.
-        if (this.swallowPointerId === pointer.id) {
-            this.swallowPointerId = null;
+        // A swallowed press releases silently exactly once — the latch
+        // clears on its first delivery and never fires.
+        if (this.swallowedPointerIds.delete(pointer.id)) {
+            if (this.pressedPointerId === pointer.id) {
+                this.pressedPointerId = null;
+            }
+            return;
         }
 
         // Exactly one fire per pointer interaction: the press must still be
@@ -189,6 +249,7 @@ export class AimController {
 
         if (
             pointer.button !== 0 ||
+            isModalInputLocked() ||
             !this.config.canFire() ||
             !this.isPlayfieldPointer(pointer)
         ) {

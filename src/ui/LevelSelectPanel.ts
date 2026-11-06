@@ -6,6 +6,7 @@ import {
     suggestedLevelIndex,
 } from '../game/data/levels/progress';
 import { loadProgress } from '../game/utils/storage';
+import { acquireModalInputLock, releaseModalInputLock } from '../game/input/modalInputLock';
 import { addPressFx } from './uiFx';
 import { uiFitScale } from '../game/responsive';
 
@@ -36,6 +37,7 @@ export class LevelSelectPanel {
 
     show(options: LevelSelectPanelOptions): void {
         this.hide();
+        acquireModalInputLock('levelSelect');
         this.options = options;
         this.transitioning = false;
 
@@ -59,6 +61,7 @@ export class LevelSelectPanel {
     }
 
     hide(): void {
+        releaseModalInputLock('levelSelect');
         if (this.container) {
             this.scene.tweens.killTweensOf(this.container);
         }
@@ -90,7 +93,9 @@ export class LevelSelectPanel {
 
         const dim = scene.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x02050d, 0.9);
         dim.setInteractive();
-        dim.on('pointerdown', () => undefined);
+        dim.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
+        });
         container.add(dim);
 
         const card = scene.add.graphics();
@@ -205,7 +210,10 @@ export class LevelSelectPanel {
         const backHit = scene.add
             .rectangle(0, 324, 160, 48, 0xffffff, 0.001)
             .setInteractive({ useHandCursor: true });
-        backHit.on('pointerdown', () => options.onBack());
+        backHit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
+            options.onBack();
+        });
         container.add(backHit);
     }
 
@@ -280,7 +288,8 @@ export class LevelSelectPanel {
             addPressFx(scene, hit, card, { hoverScale: 1, pressScale: 0.95 });
         }
 
-        hit.on('pointerdown', () => {
+        hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
             if (state === 'locked' || this.transitioning) return;
             this.transitioning = true;
             scene.time.delayedCall(90, () => options.onLevelSelect(index));
@@ -322,7 +331,8 @@ export class LevelSelectPanel {
         bg.setInteractive({ useHandCursor: true });
         bg.on('pointerover', () => bg.setScale(1.08));
         bg.on('pointerout', () => bg.setScale(1));
-        bg.on('pointerdown', () => {
+        bg.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
             bg.setScale(0.92);
             scene.time.delayedCall(80, () => {
                 if (bg.active) bg.setScale(1);

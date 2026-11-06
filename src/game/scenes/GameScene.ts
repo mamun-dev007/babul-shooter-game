@@ -26,12 +26,13 @@ import { consumeFireCharge } from '../systems/FireChargeSystem';
 import { emptyFireChargeProgress, resolveFireChargeProgress } from '../systems/fireChargeProgress';
 import { resolveStreakRewards, type StreakTracking } from '../systems/streakRewards';
 import { levelOutcomeFor } from '../data/levels/scoring';
-import { addCoins, loadProgress, recordScore, markLevelCompleted, toggleMusic, toggleSound } from '../utils/storage';
+import { addCoins, loadProgress, takePendingBonusShots, recordScore, markLevelCompleted, toggleMusic, toggleSound } from '../utils/storage';
 import { AimGuide } from '../../ui/AimGuide';
 import { SettingsPanel } from '../../ui/SettingsPanel';
 import { extraBallsRewardFor, showRewardedAd } from '../../ads/rewardedAds';
 import { gameAudio } from '../audio/GameAudio';
 import { BoardScrollController } from '../input/BoardScrollController';
+import { isModalInputLocked, resetModalInputLock } from '../input/modalInputLock';
 import { GameOverPanel } from '../../ui/GameOverPanel';
 import { HUD, type PowerUpId } from '../../ui/HUD';
 import { PausePanel } from '../../ui/PausePanel';
@@ -62,6 +63,14 @@ export class GameScene extends Scene {
     private boardScroll: BoardScrollController | null = null;
     private boardMaskShape: Phaser.GameObjects.Graphics | null = null;
     private pausePanel: PausePanel | null = null;
+    private get anyModalOpen(): boolean {
+        return (
+            isModalInputLocked() ||
+            this.paused ||
+            (this.settingsPanel?.isOpen ?? false) ||
+            (this.gameOverPanel?.isOpen ?? false)
+        );
+    }
     private settingsPanel: SettingsPanel | null = null;
     private gameOverPanel!: GameOverPanel;
     private activeBubble: Bubble | null = null;
@@ -84,10 +93,16 @@ export class GameScene extends Scene {
      * percent form for the button's charge ring.
      */
     private fireChargeProgressState = emptyFireChargeProgress();
+    /** At most one Bomb Shot can be stored per level attempt (disabled at start). */
+    private availableBombs = 0;
     private pendingShotDirectRemoved = 0;
     private pendingShotUnsupportedRemoved = 0;
     private pendingShotDestroyedAny = false;
     private shotResultRecorded = false;
+    /** True while a bomb projectile is armed/launched; prevents duplicate launches. */
+    private bombLaunchInFlight = false;
+    /** Power type of the shot currently resolving rewards (null after resolution). */
+    private pendingShotPower: ShotPower | 'lightning' = null;
     private streakTracking: StreakTracking = { powerStreak: 0, bombStreak: 0 };
     /** Lock for the rewarded extra-balls flow; guards duplicate claims. */
     private extraBallsInProgress = false;
@@ -100,6 +115,14 @@ export class GameScene extends Scene {
     }
 
     create(data?: GameSceneData): void {
+        // Start every attempt with a clean modal lock so a stale popup from
+        // a previous scene can never wedge gameplay input. Popups register
+        // themselves in the lock while they are visible.
+        resetModalInputLock();
+        // Only the top-most interactive object (dim overlay, popup buttons)
+        // may receive a pointer event, so popup clicks cannot fall through
+        // to the HUD/board underneath.
+        this.input.topOnly = true;
         const requestedLevel = data?.level;
         this.currentLevelIndex =
             typeof requestedLevel === 'number' && Number.isFinite(requestedLevel)
@@ -121,6 +144,9 @@ export class GameScene extends Scene {
         this.pendingShotUnsupportedRemoved = 0;
         this.pendingShotDestroyedAny = false;
         this.shotResultRecorded = false;
+        this.availableBombs = 0;
+        this.bombLaunchInFlight = false;
+        this.pendingShotPower = null;
         // Streak rewards restart with every new level.
         this.streakTracking = { powerStreak: 0, bombStreak: 0 };
         this.selectedPower = null;
@@ -158,6 +184,12 @@ export class GameScene extends Scene {
         this.collision = new CollisionSystem(this.grid);
         this.matchSystem = new MatchSystem(this.grid);
         this.levelSystem.buildBoard(this.grid);
+        // Purchased bonus shots (Coin Store) apply to this attempt exactly
+        // once, then clear so they can never pay out twice.
+        const pendingShots = takePendingBonusShots();
+        if (pendingShots > 0) {
+            this.levelSystem.addExtraShots(pendingShots);
+        }
         // Requirement: every new level starts an untouched charge cycle —
         // the Fire button is disabled at 0% and the required successful
         // shots are derived from this level's available shots (1/3 target).
@@ -213,11 +245,11 @@ export class GameScene extends Scene {
         this.aimController = new AimController(this, {
             shooter: this.shooter,
             canAim: () =>
-                !this.paused &&
+                !this.anyModalOpen &&
                 !this.ended &&
                 !(this.boardScroll?.isDragging ?? false),
             canFire: () =>
-                !this.paused &&
+                !this.anyModalOpen &&
                 !this.ended &&
                 this.activeBubble === null &&
                 !this.boardScroll?.isEngaged &&
@@ -227,7 +259,7 @@ export class GameScene extends Scene {
         });
 
         this.shooter.setOnBubbleSwap(() => {
-            if (this.paused || this.ended || this.activeBubble || this.selectedPower) {
+            if (this.anyModalOpen || this.ended || this.activeBubble || this.selectedPower) {
                 // Also blocked during Fire Launcher Mode: the bubble icon is
                 // hidden behind the flame, so slot swaps must not happen.
                 return false;
@@ -284,11 +316,9 @@ export class GameScene extends Scene {
     }
 
     private activatePowerUp(powerUp: PowerUpId): boolean {
-        if (this.paused || this.ended) {
+        if (this.anyModalOpen || this.ended) {
             return false;
         }
-
-        // The bottom colour-change button: with a colour charge available it
         // swaps the loaded bubble to a fresh random colour; once spent the
         // button stays the rewarded-ad entry it already was (one full video
         // pays exactly 3 extra shots — see requestExtraBalls).
@@ -318,8 +348,7 @@ export class GameScene extends Scene {
         }
 
         if (powerUp === 'bomb') {
-            const inventoryKey = POWER_UP_INVENTORY_KEY.bomb;
-            if (loadPowerUpInventory()[inventoryKey] <= 0) return false;
+            if (this.availableBombs <= 0 || this.bombLaunchInFlight) return false;
             this.selectPower(this.selectedPower === 'bomb' ? null : 'bomb');
             return true;
         }
@@ -393,19 +422,28 @@ export class GameScene extends Scene {
 
     private selectPower(power: ShotPower): void {
         this.selectedPower = power;
-        this.shooter.setLoadedPower(power, power === 'bomb' ? 'powerup-bomb' : power === 'fireball' ? 'icon-fire' : null);
+        if (power === 'bomb') {
+            this.shooter.setLoadedBomb(true);
+        } else {
+            this.shooter.setLoadedPower(power, power === 'fireball' ? 'icon-fire' : null);
+        }
         this.shooter.setCurrentFireTint(power === 'fireball');
         // Fireball selection IS Fire Launcher Mode: the loaded bubble is
         // swapped for the animated flame inside the launcher. Every other
         // state (bomb, none, post-shot clear) restores the normal bubble.
         this.shooter.setFireLauncherMode(power === 'fireball');
         this.hud.setActivePowerUp(power === 'fireball' ? 'fireball' : power === 'bomb' ? 'bomb' : null);
+        this.hud.setBombState(this.availableBombs > 0, power === 'bomb');
         this.aimGuide.setFireMode(
             power === 'fireball',
             power === 'fireball' ? (impact) => this.fireExplosionBubbles(impact.x, impact.y) : null
         );
+        this.aimGuide.setBombMode(
+            power === 'bomb',
+            power === 'bomb' ? (impact) => this.bombExplosionBubbles(impact.x, impact.y) : null
+        );
         this.aimGuide.show();
-        if (power) this.showFireReadyText(power === 'fireball');
+        if (power) this.showFireReadyText(power === 'fireball', power === 'bomb' ? 'BOMB READY' : undefined);
     }
 
     private launchPowerShot(power: Exclude<ShotPower, null>): void {
@@ -416,7 +454,7 @@ export class GameScene extends Scene {
 
         this.activeBubble = new Bubble(this, muzzle.x, muzzle.y, color);
         this.activeShotPower = power;
-        this.activeBubble.setTint(power === 'bomb' ? 0xff613d : 0xffa32f);
+        this.activeBubble.setTint(power === 'bomb' ? 0xffa05a : 0xffa32f);
         this.activeBubble.setScale(this.activeBubble.scale * 1.16);
         this.bubbleVelocity.x = Math.sin(angle) * LAUNCH_SPEED * (power === 'fireball' ? 1.2 : 1);
         this.bubbleVelocity.y = -Math.cos(angle) * LAUNCH_SPEED * (power === 'fireball' ? 1.2 : 1);
@@ -443,6 +481,13 @@ export class GameScene extends Scene {
             return;
         }
 
+        if (power === 'bomb') {
+            // Bomb projectile is launched but is NOT a normal bubble shot and
+            // NOT a Fire charging shot. registerShot() is intentionally skipped.
+            this.projectileIcon.setTint(0xfff0d8);
+            return;
+        }
+
         this.registerShot();
     }
 
@@ -460,7 +505,10 @@ export class GameScene extends Scene {
         const angle = this.shooter.getAimAngle();
         const muzzle = this.shooter.getMuzzlePosition();
         if (this.selectedPower === 'bomb') {
-            if (!consumePowerUp('bomb')) return;
+            // Bomb is consumed only when the projectile actually launches.
+            if (this.availableBombs <= 0 || this.bombLaunchInFlight) return;
+            this.availableBombs = 0;
+            this.bombLaunchInFlight = true;
             this.shooter.setLoadedPower(null);
             this.selectPower(null);
             this.refreshPowerUpCounts();
@@ -494,6 +542,7 @@ export class GameScene extends Scene {
         this.pendingShotUnsupportedRemoved = 0;
         this.pendingShotDestroyedAny = false;
         this.shotResultRecorded = false;
+        this.pendingShotPower = null;
         this.dropAfterShot = this.levelSystem.registerShot();
         this.aimGuide.hide();
         this.refreshHud();
@@ -504,7 +553,7 @@ export class GameScene extends Scene {
      * shots destroy bubbles outside the normal match flow, so their success is
      * recorded explicitly without feeding the big-match fire-charge reward.
      */
-    private recordPowerShotOutcome(removedCount: number): void {
+    private recordPowerShotOutcome(removedCount: number, power: ShotPower | 'lightning' = null): void {
         if (this.shotResultRecorded) {
             return;
         }
@@ -512,6 +561,7 @@ export class GameScene extends Scene {
         this.pendingShotDirectRemoved = 0;
         this.pendingShotUnsupportedRemoved = 0;
         this.pendingShotDestroyedAny = removedCount > 0;
+        this.pendingShotPower = power;
         this.shotResultRecorded = true;
     }
 
@@ -527,14 +577,32 @@ export class GameScene extends Scene {
         this.destroyProjectileEffects();
 
         if (power === 'bomb') {
-            const removed = this.grid
-                .shootableBubbles()
-                .filter((target) => PhaserMath.Distance.Between(bubble.x, bubble.y, target.x, target.y) <= BUBBLE_RADIUS * 3.2);
-            this.recordPowerShotOutcome(removed.length);
-            this.score += this.removeBubblesAndFloats(removed, 15);
+            // Bomb resolves at the snap location (existing collision result) and
+            // destroys up to 10 nearest bubbles in a circular radius around the
+            // exact impact point (not a fixed grid). It does not count as a
+            // normal bubble shot and does not feed Fire charging/rewards.
+            const cell = this.collision.resolveCell(bubble.x, bubble.y, hitCell);
+            const impactPoint = cell ? this.grid.positionFor(cell.row, cell.col) : { x: bubble.x, y: bubble.y };
+            const removed = this.bombExplosionBubbles(impactPoint.x, impactPoint.y);
+            this.createBombImpact(impactPoint.x, impactPoint.y);
             bubble.destroy();
+            this.bombLaunchInFlight = false;
+            this.availableBombs = 0;
+            this.score += this.removeBubblesAndFloats(removed, 18);
+            this.refreshPowerUpCounts();
+            this.refreshHud();
+            this.activeShotPower = null;
+            // Keep board/HUD consistent without treating this as a shot.
+            this.syncShooterColors();
+            this.levelSystem.syncBoard(this.grid);
+            this.checkLevelEnd();
+            if (!this.ended) {
+                this.aimGuide.show();
+            }
+            return;
         } else if (power === 'fireball') {
             const removed = this.fireExplosionBubbles(bubble.x, bubble.y);
+            this.recordPowerShotOutcome(removed.length, 'fireball');
             this.score += this.removeBubblesAndFloats(removed, 20);
             this.createFireImpact(bubble.x, bubble.y);
             bubble.destroy();
@@ -556,7 +624,19 @@ export class GameScene extends Scene {
         }
 
         this.activeShotPower = null;
-        this.finishShot();
+        if (power === 'fireball') {
+            this.finishShot();
+        } else if (power === null) {
+            this.finishShot();
+        } else {
+            // Bomb: keep board/HUD consistent without treating this as a shot.
+            this.syncShooterColors();
+            this.levelSystem.syncBoard(this.grid);
+            this.checkLevelEnd();
+            if (!this.ended) {
+                this.aimGuide.show();
+            }
+        }
     }
 
     private fireExplosionBubbles(x: number, y: number): Bubble[] {
@@ -583,6 +663,71 @@ export class GameScene extends Scene {
             }
         }
         return removed;
+    }
+
+    /** Bomb: circular radial blast, up to 10 nearest bubbles within radius (not a grid). */
+    private bombExplosionBubbles(x: number, y: number): Bubble[] {
+        const blastRadius = BUBBLE_RADIUS * 4.2;
+        const maxDestroyed = 10;
+        return this.grid
+            .shootableBubbles()
+            .map((bubble) => ({
+                bubble,
+                distance: PhaserMath.Distance.Between(x, y, bubble.x, bubble.y),
+            }))
+            .filter((entry) => entry.distance <= blastRadius)
+            .sort((a, b) => a.distance - b.distance)
+            .slice(0, maxDestroyed)
+            .map((entry) => entry.bubble);
+    }
+
+    private createBombImpact(x: number, y: number): void {
+        const blastRadius = BUBBLE_RADIUS * 4.2;
+        const core = this.add.circle(x, y, 14, 0xfff0c8).setDepth(45);
+        const blast = this.add.circle(x, y, 18, 0xff7a2a, 0.28).setDepth(43);
+        const ring = this.add.circle(x, y, 18, 0xffb347, 0).setDepth(44).setStrokeStyle(4, 0xffe0a0, 0.95);
+        const shock = this.add.circle(x, y, 12, 0xffffff, 0).setDepth(46).setStrokeStyle(3, 0xfff0c8, 0.85);
+        this.tweens.add({ targets: core, scale: 2.4, alpha: 0, duration: 260, ease: 'Quad.easeOut', onComplete: () => core.destroy() });
+        this.tweens.add({ targets: blast, radius: blastRadius, alpha: 0, duration: 380, ease: 'Cubic.easeOut', onComplete: () => blast.destroy() });
+        this.tweens.add({ targets: ring, scale: blastRadius / 18, alpha: 0, duration: 420, ease: 'Cubic.easeOut', onComplete: () => ring.destroy() });
+        this.tweens.add({ targets: shock, scale: blastRadius / 12, alpha: 0, duration: 460, ease: 'Cubic.easeOut', onComplete: () => shock.destroy() });
+
+        const sparks = [0xfff1a8, 0xffc04a, 0xff8a1f, 0xff5a2a];
+        for (let index = 0; index < 22; index++) {
+            const angle = (Math.PI * 2 * index) / 22 + PhaserMath.FloatBetween(-0.08, 0.08);
+            const distance = PhaserMath.FloatBetween(blastRadius * 0.35, blastRadius);
+            const particle = this.add.circle(x, y, PhaserMath.Between(2, 4), sparks[index % sparks.length], 1).setDepth(47);
+            this.tweens.add({
+                targets: particle,
+                x: x + Math.cos(angle) * distance,
+                y: y + Math.sin(angle) * distance,
+                scale: 0.2,
+                alpha: 0,
+                duration: PhaserMath.Between(260, 520),
+                ease: 'Quad.easeOut',
+                onComplete: () => particle.destroy(),
+            });
+        }
+
+        for (let index = 0; index < 10; index++) {
+            const smoke = this.add.circle(
+                x + PhaserMath.Between(-12, 12),
+                y + PhaserMath.Between(-10, 10),
+                PhaserMath.Between(7, 13),
+                0x8a8f99,
+                0.36
+            ).setDepth(42);
+            this.tweens.add({
+                targets: smoke,
+                y: smoke.y - PhaserMath.Between(18, 38),
+                x: smoke.x + PhaserMath.Between(-14, 14),
+                scale: 1.7,
+                alpha: 0,
+                duration: PhaserMath.Between(460, 760),
+                ease: 'Quad.easeOut',
+                onComplete: () => smoke.destroy(),
+            });
+        }
     }
 
     private spawnFireProjectileParticle(x: number, y: number): void {
@@ -665,7 +810,7 @@ export class GameScene extends Scene {
         this.registerShot();
         const row = target.row;
         const rowBubbles = candidates.filter((bubble) => bubble.row === row);
-        this.recordPowerShotOutcome(rowBubbles.length);
+        this.recordPowerShotOutcome(rowBubbles.length, 'lightning');
         this.score += this.removeBubblesAndFloats(rowBubbles, 12);
         this.drawLightning(target.x, target.y);
         this.refreshHud();
@@ -738,9 +883,10 @@ export class GameScene extends Scene {
     private finishShotResolution(): void {
         if (!this.shotResultRecorded) return;
         this.shotResultRecorded = false;
+        const totalDestroyed =
+            this.pendingShotDirectRemoved + this.pendingShotUnsupportedRemoved;
         const shotDestroyedAny =
-            this.pendingShotDestroyedAny ||
-            this.pendingShotDirectRemoved + this.pendingShotUnsupportedRemoved > 0;
+            this.pendingShotDestroyedAny || totalDestroyed > 0;
         // Consecutive-bomb streak (5 successful shots) is unchanged. The
         // legacy 10-shot fireball streak is superseded by the dedicated
         // Fire charge progress below; holding that slot permanently keeps
@@ -757,36 +903,72 @@ export class GameScene extends Scene {
         this.pendingShotUnsupportedRemoved = 0;
         this.pendingShotDestroyedAny = false;
 
-        // Fire Power charging: one successful shot advances the cycle by
-        // 100 / floor(availableShots / 3) percent; any shot that destroys
-        // nothing resets the whole cycle to 0%. Runs exactly once per
-        // launched bubble (guarded by shotResultRecorded above), reading the
-        // real destruction result — never the launch or the collision hit.
-        const chargeStep = resolveFireChargeProgress(
-            this.fireChargeProgressState,
-            shotDestroyedAny,
-            this.levelSystem.maxShots
-        );
-        this.fireChargeProgressState = chargeStep.progress;
+        const shotPower = this.pendingShotPower;
+        this.pendingShotPower = null;
 
-        if (chargeStep.reset) {
-            this.fireCharges = 0;
+        // Fire Power charging: ONLY successful NORMAL Bubble Launcher shots
+        // advance the cycle. Fire/Bomb projectiles never count. A miss resets
+        // to 0% only while NOT fully charged/ready; once 100% is reached it
+        // stays locked until a Fire projectile actually launches.
+        let fireReady = false;
+        if (shotPower === null) {
+            const fireLocked = this.fireCharges > 0 || this.fireChargeProgressState.percent >= 100;
+            if (!fireLocked || shotDestroyedAny) {
+                const chargeStep = resolveFireChargeProgress(
+                    this.fireChargeProgressState,
+                    shotDestroyedAny,
+                    this.levelSystem.maxShots
+                );
+                this.fireChargeProgressState = chargeStep.progress;
+
+                if (chargeStep.reset && !fireLocked) {
+                    this.fireCharges = 0;
+                }
+
+                if (chargeStep.reachedFull) {
+                    this.fireCharges = Math.min(1, this.fireCharges + 1);
+                    this.fireChargeProgressState = {
+                        ...this.fireChargeProgressState,
+                        percent: 100,
+                        requiredShots: this.fireChargeProgressState.requiredShots,
+                        streak: this.fireChargeProgressState.requiredShots,
+                    };
+                    fireReady = true;
+                } else if (fireLocked) {
+                    this.fireCharges = 1;
+                    this.fireChargeProgressState = {
+                        ...this.fireChargeProgressState,
+                        percent: 100,
+                        requiredShots: this.fireChargeProgressState.requiredShots,
+                        streak: this.fireChargeProgressState.requiredShots,
+                    };
+                }
+            }
         }
 
-        if (chargeStep.reachedFull) {
-            // The completing shot fills the button to exactly 100%.
-            this.fireCharges = Math.min(1, this.fireCharges + 1);
+        // Bomb unlock (per individual normal shot): destroying 10+ bubbles in a
+        // SINGLE successful normal shot awards exactly ONE stored Bomb Shot.
+        // Never while a Bomb is already stored; never from bomb/fire power shots.
+        let bombEarned = false;
+        if (shotPower === null && totalDestroyed >= 10 && this.availableBombs <= 0) {
+            this.availableBombs = 1;
+            bombEarned = true;
         }
 
         if (streak.bombEarned) {
+            // Keep inventory streak reward behavior, but the UI/shot system uses
+            // the single stored bomb slot; clamp to max 1.
             grantPowerUp('bomb');
+            if (this.availableBombs <= 0) {
+                this.availableBombs = 1;
+                bombEarned = true;
+            }
         }
 
-        if (chargeStep.reachedFull || streak.bombEarned) {
-            const grantedPower = chargeStep.reachedFull;
-            const message = grantedPower && streak.bombEarned
+        if (fireReady || bombEarned) {
+            const message = fireReady && bombEarned
                 ? 'POWER + BOMB READY!'
-                : streak.bombEarned
+                : bombEarned
                     ? 'BOMB READY!'
                     : 'FIRE POWER READY!';
             this.showFireReadyText(false, message);
@@ -1088,12 +1270,9 @@ export class GameScene extends Scene {
         }
     }
 
-    /**
-     * The Power-Up buttons carry no count badges; the only live indicator is
-     * the Fire Power charge ring (0–99% disabled, 100% ready and pulsing).
-     */
     private refreshPowerUpCounts(): void {
         this.hud.setFireChargeProgress(this.shownFireChargePercent());
+        this.hud.setBombState(this.availableBombs > 0, this.selectedPower === 'bomb');
     }
 
     /** Charge percent for the button: full while a charge is being held. */
@@ -1231,6 +1410,7 @@ export class GameScene extends Scene {
         this.settingsPanel?.destroy();
         this.settingsPanel = null;
         this.gameOverPanel?.destroy();
+        resetModalInputLock();
         this.boardScroll?.destroy();
         this.boardScroll = null;
         this.aimController?.destroy();

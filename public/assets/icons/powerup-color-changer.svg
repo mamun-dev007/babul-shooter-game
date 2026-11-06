@@ -35,11 +35,6 @@
       <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
       <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <!-- Plus badge: contrasting red disc with a bright white ring. -->
-    <linearGradient id="plusDisc" x1="50%" y1="0%" x2="50%" y2="100%">
-      <stop offset="0%" stop-color="#F2565B"/>
-      <stop offset="100%" stop-color="#C21D2B"/>
-    </linearGradient>
   </defs>
 
   <!-- Main colourful glossy bubble -->
@@ -55,9 +50,4 @@
   </g>
   <!-- Rim light around the sphere edge -->
   <circle cx="24.5" cy="24.5" r="18" fill="none" stroke="#FFFFFF" stroke-opacity="0.42" stroke-width="1.6"/>
-
-  <!-- Small circular Plus badge overlapping the bubble's bottom-right -->
-  <circle cx="41.5" cy="41.5" r="10" fill="url(#plusDisc)" stroke="#FFFFFF" stroke-width="2.4"/>
-  <rect x="36.6" y="40.05" width="9.8" height="2.9" rx="1.45" fill="#FFFFFF"/>
-  <rect x="40.05" y="36.6" width="2.9" height="9.8" rx="1.45" fill="#FFFFFF"/>
 </svg>

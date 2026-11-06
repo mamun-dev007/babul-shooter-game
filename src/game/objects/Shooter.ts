@@ -313,7 +313,21 @@ export class Shooter extends GameObjects.Container {
             this.loadedBubble.setAlpha(1);
         } else {
             this.loadedBubble.setDisplaySize(BUBBLE_DIAMETER, BUBBLE_DIAMETER);
+            this.loadedBubble.clearTint();
             this.refreshTextures();
+        }
+    }
+
+    /** Shows the Bomb icon in the launcher while Bomb Launcher Mode is active. */
+    setLoadedBomb(active: boolean): void {
+        if (active) {
+            this.loadedBubble.setTexture('powerup-bomb');
+            this.loadedBubble.setDisplaySize(BUBBLE_DIAMETER * 1.12, BUBBLE_DIAMETER * 1.12);
+            this.loadedBubble.clearTint();
+            this.loadedBubble.setAlpha(1);
+            this.loadedBubble.setVisible(true);
+        } else {
+            this.setLoadedPower(null);
         }
     }
 

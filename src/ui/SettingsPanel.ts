@@ -1,5 +1,6 @@
 import { FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../game/config';
 import { gameAudio } from '../game/audio/GameAudio';
+import { acquireModalInputLock, releaseModalInputLock } from '../game/input/modalInputLock';
 import { loadProgress } from '../game/utils/storage';
 import { addPressFx } from './uiFx';
 import { uiFitScale } from '../game/responsive';
@@ -15,6 +16,8 @@ export interface SettingsPanelOptions {
 interface ToggleRow {
     setEnabled: (enabled: boolean) => void;
 }
+
+const SETTINGS_LOCK_ID = 'settings';
 
 export class SettingsPanel {
     private readonly scene: Phaser.Scene;
@@ -32,6 +35,7 @@ export class SettingsPanel {
 
     show(options: SettingsPanelOptions): void {
         this.destroy();
+        acquireModalInputLock(SETTINGS_LOCK_ID);
 
         const scene = this.scene;
         const container = scene.add
@@ -43,7 +47,9 @@ export class SettingsPanel {
 
         const dim = scene.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x02050d, 0.86);
         dim.setInteractive();
-        dim.on('pointerdown', () => undefined);
+        dim.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
+        });
 
         const card = scene.add.graphics();
         card.fillStyle(0x0c1730, 0.985);
@@ -110,7 +116,10 @@ export class SettingsPanel {
         back.add([backBg, backText, backHit]);
         container.add(back);
 
-        backHit.on('pointerdown', () => options.onBack());
+        backHit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
+            options.onBack();
+        });
         addPressFx(scene, backHit, back, { hoverScale: 1.04, pressScale: 0.94 });
 
         // The game scene pauses all tweens while the settings popup is open.
@@ -119,6 +128,7 @@ export class SettingsPanel {
     }
 
     hide(): void {
+        releaseModalInputLock(SETTINGS_LOCK_ID);
         const container = this.container;
 
         if (!container) {
@@ -132,6 +142,7 @@ export class SettingsPanel {
     }
 
     destroy(): void {
+        releaseModalInputLock(SETTINGS_LOCK_ID);
         const container = this.container;
 
         if (!container) {
@@ -196,7 +207,8 @@ export class SettingsPanel {
             scene.tweens.killTweensOf(row);
             scene.tweens.add({ targets: row, scaleX: 1, scaleY: 1, duration: 130 });
         });
-        hit.on('pointerdown', () => {
+        hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
             enabled = onToggle();
             draw();
             knob.setScale(1.2);

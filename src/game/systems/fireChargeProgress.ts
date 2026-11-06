@@ -10,8 +10,9 @@
  *     chargePercentage = (consecutiveSuccessfulShots / requiredShots) * 100
  *
  * A shot counts as successful only when it actually destroyed at least one
- * bubble; any shot that destroys nothing — even one that hit the board —
- * resets the entire streak and the charge to 0%.
+ * bubble; before 100%, any shot that destroys nothing — even one that hit
+ * the board — resets the entire streak and the charge to 0%. Once 100% is
+ * reached, the charge is locked (later misses hold 100% until launch).
  */
 
 export interface FireChargeProgress {
@@ -45,6 +46,10 @@ export const emptyFireChargeProgress = (totalAvailableShots = 0): FireChargeProg
  * Advances one shot outcome through the charge cycle. `totalAvailableShots`
  * is re-derived on every shot so rewarded-ad bonus bubbles (which grow the
  * attempt budget mid-level) keep the 1/3 target accurate.
+ *
+ * Normal shots only are passed to this resolver by the scene. Once the
+ * cycle has reached 100%, later normal misses hold 100% (the charge is
+ * locked); only an actual Fire Projectile launch resets it.
  */
 export const resolveFireChargeProgress = (
     progress: FireChargeProgress,
@@ -53,6 +58,11 @@ export const resolveFireChargeProgress = (
 ): FireChargeStep => {
     const requiredShots = requiredShotsForFireCharge(totalAvailableShots);
 
+    if (progress.percent >= 100) {
+        // Fully charged and held: later normal misses must not reduce it.
+        return { progress: { ...progress, requiredShots }, reachedFull: false, reset: false };
+    }
+
     if (!shotDestroyedAny) {
         // A miss ends the cycle instantly: 0 consecutive shots, 0%.
         return {
@@ -60,11 +70,6 @@ export const resolveFireChargeProgress = (
             reachedFull: false,
             reset: true,
         };
-    }
-
-    if (progress.percent >= 100) {
-        // Fully charged and unused: further successes simply hold 100%.
-        return { progress: { ...progress, requiredShots }, reachedFull: false, reset: false };
     }
 
     const streak = Math.min(progress.streak + 1, requiredShots);

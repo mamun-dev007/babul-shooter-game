@@ -19,6 +19,13 @@ export type Progress = {
     graphics?: 'low' | 'medium' | 'high';
     aimGuide?: boolean;
     controlHandedness?: 'right' | 'left';
+    /** Coin store lifetime totals (tracked by addCoins). */
+    totalCoinsEarned?: number;
+    totalCoinsSpent?: number;
+    /** UTC calendar day (YYYY-MM-DD) of the last free-coin claim. */
+    lastDailyClaimDay?: string;
+    /** Purchased bonus shots waiting to be applied to the next attempt. */
+    pendingBonusShots?: number;
 };
 
 /** Bumped whenever the persisted shape or index semantics change. */
@@ -41,6 +48,10 @@ const DEFAULT_PROGRESS: Progress = {
     graphics: 'medium',
     aimGuide: true,
     controlHandedness: 'right',
+    totalCoinsEarned: 0,
+    totalCoinsSpent: 0,
+    lastDailyClaimDay: '',
+    pendingBonusShots: 0,
 };
 
 let cached: Progress | null = null;
@@ -131,6 +142,13 @@ const normalizeProgress = (parsed: Partial<Progress>): Progress => {
             parsed.controlHandedness === 'left' || parsed.controlHandedness === 'right'
                 ? parsed.controlHandedness
                 : DEFAULT_PROGRESS.controlHandedness,
+        totalCoinsEarned: clampInt(parsed.totalCoinsEarned, 0, Number.MAX_SAFE_INTEGER, 0),
+        totalCoinsSpent: clampInt(parsed.totalCoinsSpent, 0, Number.MAX_SAFE_INTEGER, 0),
+        lastDailyClaimDay:
+            typeof parsed.lastDailyClaimDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.lastDailyClaimDay)
+                ? parsed.lastDailyClaimDay
+                : '',
+        pendingBonusShots: clampInt(parsed.pendingBonusShots, 0, 10000, 0),
     };
 };
 
@@ -285,9 +303,52 @@ export function toggleMusic(): boolean {
 
 export function addCoins(amount: number): number {
     const progress = loadProgress();
-    progress.coins = Math.max(0, Math.floor(progress.coins + amount));
+    const delta = Math.max(-progress.coins, Math.floor(Number(amount) || 0));
+    progress.coins = Math.max(0, progress.coins + delta);
+    if (delta > 0) {
+        progress.totalCoinsEarned = (progress.totalCoinsEarned || 0) + delta;
+    } else if (delta < 0) {
+        progress.totalCoinsSpent = (progress.totalCoinsSpent || 0) + Math.abs(delta);
+    }
     saveProgress(progress);
     return progress.coins;
+}
+
+export const DAILY_FREE_COINS = 25;
+
+export const utcDayString = (now = new Date()): string => now.toISOString().slice(0, 10);
+
+export const canClaimDailyCoins = (now = new Date()): boolean =>
+    loadProgress().lastDailyClaimDay !== utcDayString(now);
+
+export function claimDailyCoins(now = new Date()): number {
+    const progress = loadProgress();
+    const today = utcDayString(now);
+    if (progress.lastDailyClaimDay === today) {
+        return 0;
+    }
+
+    progress.lastDailyClaimDay = today;
+    saveProgress(progress);
+    return addCoins(DAILY_FREE_COINS);
+}
+
+export function addPendingBonusShots(count: number): number {
+    const progress = loadProgress();
+    progress.pendingBonusShots = Math.max(0, (progress.pendingBonusShots || 0) + Math.max(0, Math.floor(Number(count) || 0)));
+    saveProgress(progress);
+    return progress.pendingBonusShots;
+}
+
+export function takePendingBonusShots(): number {
+    const progress = loadProgress();
+    const pending = progress.pendingBonusShots || 0;
+    if (pending > 0) {
+        progress.pendingBonusShots = 0;
+        saveProgress(progress);
+    }
+
+    return pending;
 }
 
 export const resetProgress = (onlyGameProgress = true): void => {

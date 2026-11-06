@@ -44,10 +44,10 @@ export class AssetLoader {
         
         // Power-ups
         this.scene.load.svg('powerup-bomb', 'assets/icons/powerup-bomb.svg', { width: 56, height: 56 });
-        // ?v=2 cache-buster: the artwork was redesigned (glossy bubble +
-        // plus badge); the query forces every browser to fetch the new file
-        // instead of a cached copy of the old colour-wheel icon.
-        this.scene.load.svg('powerup-color', 'assets/icons/powerup-color-changer.svg?v=2', { width: 56, height: 56 });
+        // ?v=3 cache-buster: the small plus badge on the glossy bubble was
+        // removed; the query forces every browser to fetch the new file
+        // instead of a cached copy of the old artwork.
+        this.scene.load.svg('powerup-color', 'assets/icons/powerup-color-changer.svg?v=3', { width: 56, height: 56 });
         this.scene.load.svg('powerup-lightning', 'assets/icons/powerup-lightning.svg', { width: 56, height: 56 });
         this.scene.load.svg('powerup-fireball', 'assets/icons/powerup-fireball.svg', { width: 56, height: 56 });
         this.scene.load.svg('icon-fire', 'assets/icons/icon-fire.svg', { width: 56, height: 56 });

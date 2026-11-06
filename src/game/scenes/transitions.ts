@@ -42,6 +42,25 @@ export const goToScene = (
     });
 };
 
+/**
+ * Starts another scene immediately with no fade. The caller's own
+ * transitioning guard (e.g. MenuScene.transitioning) must already have
+ * been set on the same tap, so repeated taps cannot double-start.
+ */
+export const goToSceneInstant = (
+    scene: Scene,
+    key: string,
+    data?: object
+): void => {
+    if (transitionsInFlight.has(scene)) {
+        return;
+    }
+
+    transitionsInFlight.add(scene);
+    scene.scene.start(key, data);
+    transitionsInFlight.delete(scene);
+};
+
 export const restartScene = (
     scene: Scene,
     data?: object,

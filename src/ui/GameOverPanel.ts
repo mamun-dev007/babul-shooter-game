@@ -1,5 +1,6 @@
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../game/config';
 import { gameAudio } from '../game/audio/GameAudio';
+import { acquireModalInputLock, releaseModalInputLock } from '../game/input/modalInputLock';
 import { loadProgress } from '../game/utils/storage';
 import { addPressFx } from './uiFx';
 import { uiFitScale } from '../game/responsive';
@@ -28,12 +29,17 @@ export class GameOverPanel {
     private tracked: Phaser.GameObjects.GameObject[] = [];
     private actionLocked = false;
 
+    get isOpen(): boolean {
+        return this.container !== null;
+    }
+
     constructor(scene: Phaser.Scene) {
         this.scene = scene;
     }
 
     show(options: GameOverPanelOptions): void {
         this.destroyCurrent();
+        acquireModalInputLock('gameOver');
 
         const scene = this.scene;
         const container = scene.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2).setDepth(200);
@@ -45,7 +51,9 @@ export class GameOverPanel {
         const dim = scene.add
             .rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x02050d, 0.78)
             .setInteractive();
-        dim.on('pointerdown', () => undefined);
+        dim.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
+        });
 
         const won = options.win === true;
         // Green-to-blue glossy card for a win; red stays for a loss.
@@ -297,6 +305,7 @@ export class GameOverPanel {
     }
 
     hide(): void {
+        releaseModalInputLock('gameOver');
         const container = this.container;
 
         if (!container) {
@@ -325,6 +334,7 @@ export class GameOverPanel {
     }
 
     private destroyCurrent(): void {
+        releaseModalInputLock('gameOver');
         const container = this.container;
 
         if (!container) {
@@ -421,7 +431,8 @@ export class GameOverPanel {
             const hit = this.scene.add.circle(0, 0, 21, 0xffffff, 0.001)
                 .setInteractive({ useHandCursor: true });
 
-            hit.on('pointerdown', () => {
+            hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+                event.stopPropagation();
                 if (this.actionLocked) return;
                 this.actionLocked = true;
                 onClose();
@@ -477,7 +488,8 @@ export class GameOverPanel {
             if (!disabled) {
                 const hit = this.scene.add.rectangle(0, 0, width, height, 0xffffff, 0.001)
                     .setInteractive({ useHandCursor: true });
-                hit.on('pointerdown', () => {
+                hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+                    event.stopPropagation();
                     if (this.actionLocked) return;
                     this.actionLocked = true;
                     onClick();
@@ -580,7 +592,8 @@ export class GameOverPanel {
 
         hit.on('pointerover', () => draw(true));
         hit.on('pointerout', () => draw(false));
-        hit.on('pointerdown', () => {
+        hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+            event.stopPropagation();
             if (this.actionLocked) {
                 return;
             }
