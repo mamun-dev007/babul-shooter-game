@@ -19,6 +19,7 @@ import {
 export interface DailyTasksSceneData {
     returnTo?: string;
     level?: number;
+    instant?: boolean;
 }
 
 const SCROLL_TOP = 150;
@@ -29,6 +30,7 @@ export class DailyTasksScene extends Scene {
     private claiming = false;
     private returnTo = 'LevelSelectionScene';
     private returnLevel = 0;
+    private instantOpen = false;
     private coinsText!: Phaser.GameObjects.Text;
     private countdownText!: Phaser.GameObjects.Text;
     private progressText!: Phaser.GameObjects.Text;
@@ -52,6 +54,7 @@ export class DailyTasksScene extends Scene {
     init(data: DailyTasksSceneData = {}): void {
         this.returnTo = data.returnTo ?? 'LevelSelectionScene';
         this.returnLevel = Number.isFinite(data.level) ? (data.level ?? 0) : 0;
+        this.instantOpen = data.instant === true;
     }
 
     create(): void {
@@ -66,9 +69,12 @@ export class DailyTasksScene extends Scene {
         this.buildList();
         this.bindScrollInput();
         this.countdownEvent = this.time.addEvent({ delay: 1000, loop: true, callback: () => this.tickCountdown() });
-        fadeInScene(this, 240, [5, 57, 91]);
+        // Daily-button navigation is instant: skip the fade-in when asked.
+        if (!this.instantOpen) {
+            fadeInScene(this, 240, [5, 57, 91]);
+        }
         attachRelayout(this, () => {
-            this.scene.restart({ returnTo: this.returnTo, level: this.returnLevel });
+            this.scene.restart({ returnTo: this.returnTo, level: this.returnLevel, instant: this.instantOpen });
         });
         this.events.once('shutdown', () => {
             this.popup = null;
@@ -188,7 +194,9 @@ export class DailyTasksScene extends Scene {
     }
 
     private listWidth(): number {
-        return Math.min(640, worldWidth() - 32);
+        // Matches the Gift Items mobile (single-column) card width and side
+        // margins: slightly narrower, gently centred cards.
+        return Math.min(420, worldWidth() - 48);
     }
 
     private buildList(): void {
@@ -204,7 +212,7 @@ export class DailyTasksScene extends Scene {
         const state = loadDailyProgress();
         this.renderedDay = state.day;
         const cardH = 116;
-        const gap = 14;
+        const gap = 16;
         this.championCards = [];
         DAILY_MISSIONS.forEach((mission, index) => {
             const x = this.listWidth() / 2;
@@ -317,27 +325,28 @@ export class DailyTasksScene extends Scene {
             done.setName(`claimed-${mission.id}`);
             card.add(done);
         } else {
-            const claimW = Math.min(120, width - leftW - 60);
+            const claimW = Math.min(100, width - leftW - 60);
+            const claimH = 24;
             const claimX = rightX;
             const claimY = height / 2 - 32;
             const claimBg = this.add.graphics();
             const drawClaim = (hover: boolean): void => {
                 claimBg.clear();
                 claimBg.fillStyle(0x020617, 0.45);
-                claimBg.fillRoundedRect(claimX - claimW / 2, claimY - 14 + 3, claimW, 28, 14);
+                claimBg.fillRoundedRect(claimX - claimW / 2, claimY - claimH / 2 + 3, claimW, claimH, claimH / 2);
                 const top = complete ? (hover ? 0xffe38a : 0xffd54d) : 0x64748b;
                 const bottom = complete ? (hover ? 0xffb300 : 0xf59e0b) : 0x475569;
                 claimBg.fillGradientStyle(top, top, bottom, bottom, 1);
-                claimBg.fillRoundedRect(claimX - claimW / 2, claimY - 14, claimW, 28, 14);
+                claimBg.fillRoundedRect(claimX - claimW / 2, claimY - claimH / 2, claimW, claimH, claimH / 2);
                 claimBg.lineStyle(2, 0xffffff, 0.95);
-                claimBg.strokeRoundedRect(claimX - claimW / 2, claimY - 14, claimW, 28, 14);
+                claimBg.strokeRoundedRect(claimX - claimW / 2, claimY - claimH / 2, claimW, claimH, claimH / 2);
             };
             drawClaim(false);
             const claimText = this.add
-                .text(claimX, claimY, complete ? 'CLAIM' : 'IN PROGRESS', { fontFamily: FONT_DISPLAY, fontSize: '11px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2 })
+                .text(claimX, claimY, complete ? 'CLAIM' : 'IN PROGRESS', { fontFamily: FONT_DISPLAY, fontSize: '10px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2 })
                 .setOrigin(0.5);
             claimText.setName(`claim-${mission.id}`);
-            const claimHit = this.add.rectangle(claimX, claimY, claimW, 28, 0xffffff, 0.001).setInteractive({ useHandCursor: complete });
+            const claimHit = this.add.rectangle(claimX, claimY, claimW, claimH, 0xffffff, 0.001).setInteractive({ useHandCursor: complete });
             claimHit.setData('claimMission', mission.id);
             claimHit.on('pointerup', () => {
                 if (!this.dragMoved && complete) {
@@ -380,7 +389,11 @@ export class DailyTasksScene extends Scene {
 
         gameAudio.playSfx('click');
         this.refreshBalances();
-        this.showPopup('Reward Claimed!', `+${result.coins} Coins Added!`, true);
+        const mission = DAILY_MISSIONS.find((m) => m.id === missionId);
+        const extra = mission?.grants
+            ? `\n+ ${mission.grants.bomb ?? mission.grants.fireball ?? 0} ${mission.grants.bomb ? 'Bombs' : 'Fire'} Added!`
+            : '';
+        this.showPopup('Reward Claimed!', `+${result.coins} Coins Added!${extra}`, true);
         // purchasing-style lock is released by showPopup's close handler.
     }
 
@@ -441,7 +454,7 @@ export class DailyTasksScene extends Scene {
 
     private applyScroll(next: number): void {
         const originY = SCROLL_TOP;
-        const contentHeight = DAILY_MISSIONS.length * 116 + (DAILY_MISSIONS.length - 1) * 14;
+        const contentHeight = DAILY_MISSIONS.length * 116 + (DAILY_MISSIONS.length - 1) * 16;
         const min = Math.min(0, worldHeight() - originY - 16 - contentHeight);
         this.scrollY = Math.max(min, Math.min(0, next));
         this.listContainer?.setY(originY + this.scrollY);

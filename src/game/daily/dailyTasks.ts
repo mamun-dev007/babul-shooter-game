@@ -1,4 +1,7 @@
 import { addCoins } from '../utils/storage';
+import { grantPowerUp } from '../powerups/inventory';
+import type { PowerUpInventory } from '../powerups/inventory';
+import { recordCollectedCard } from '../collected/collected';
 
 /**
  * Daily Tasks (Daily Missions) for the Bubble Shooter game.
@@ -19,14 +22,16 @@ export interface DailyMission {
     target: number;
     reward: number;
     icon: 'play' | 'target' | 'bomb' | 'fire' | 'champion';
+    /** Extra power-up rewards paid into the shared inventory on claim. */
+    grants?: Partial<PowerUpInventory>;
 }
 
 export const DAILY_MISSIONS: readonly DailyMission[] = [
     { id: 'play3', title: 'Bubble Shooter', description: 'Play 3 levels', target: 3, reward: 5, icon: 'play' },
     { id: 'complete2', title: 'Level Master', description: 'Successfully complete 2 levels', target: 2, reward: 10, icon: 'target' },
     { id: 'destroy100', title: 'Bubble Popper', description: 'Destroy 100 bubbles', target: 100, reward: 10, icon: 'bomb' },
-    { id: 'fire2', title: 'Fire Expert', description: 'Successfully use Fire Power 2 times', target: 2, reward: 5, icon: 'fire' },
-    { id: 'bomb2', title: 'Bomb Master', description: 'Successfully use Bomb Power 2 times', target: 2, reward: 5, icon: 'bomb' },
+    { id: 'fire2', title: 'Fire Expert', description: 'Successfully use Fire Power 2 times', target: 2, reward: 5, icon: 'fire', grants: { fireball: 2 } },
+    { id: 'bomb2', title: 'Bomb Master', description: 'Successfully use Bomb Power 2 times', target: 2, reward: 5, icon: 'bomb', grants: { bomb: 2 } },
     { id: 'champion', title: 'Daily Champion', description: 'Complete any 5 of the other 5 daily missions', target: 5, reward: 20, icon: 'champion' },
 ] as const;
 
@@ -210,5 +215,14 @@ export function claimDailyReward(missionId: string, now: Date = new Date()): { c
     state.claimed.push(missionId);
     persist(state);
     addCoins(mission.reward);
+    if (mission.grants) {
+        Object.entries(mission.grants).forEach(([type, amount]) => {
+            if (amount && amount > 0) {
+                grantPowerUp(type as keyof PowerUpInventory, amount);
+            }
+        });
+    }
+    // Successful confirmed collection for the daily Collected Items.
+    recordCollectedCard('daily', missionId, now);
     return { claimed: true, coins: mission.reward };
 }

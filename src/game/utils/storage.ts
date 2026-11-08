@@ -11,6 +11,9 @@ export type Progress = {
     bestScore: number;
     sound: boolean;
     music: boolean;
+    masterVolume?: number;
+    musicVolume?: number;
+    sfxVolume?: number;
     coins: number;
     completedLevels: number[];
     stars: Record<number, number>; // level index -> stars (0-3)
@@ -40,6 +43,9 @@ const DEFAULT_PROGRESS: Progress = {
     bestScore: 0,
     sound: true,
     music: true,
+    masterVolume: 1,
+    musicVolume: 0.8,
+    sfxVolume: 0.9,
     coins: 1000,
     completedLevels: [],
     stars: {},
@@ -55,6 +61,11 @@ const DEFAULT_PROGRESS: Progress = {
 };
 
 let cached: Progress | null = null;
+
+const clampVolume = (value: unknown, fallback: number): number => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+    return Math.max(0, Math.min(1, value));
+};
 
 const clampInt = (value: unknown, min: number, max: number, fallback: number): number => {
     if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -128,6 +139,9 @@ const normalizeProgress = (parsed: Partial<Progress>): Progress => {
         bestScore: clampInt(parsed.bestScore, 0, Number.MAX_SAFE_INTEGER, DEFAULT_PROGRESS.bestScore),
         sound: typeof parsed.sound === 'boolean' ? parsed.sound : DEFAULT_PROGRESS.sound,
         music: typeof parsed.music === 'boolean' ? parsed.music : DEFAULT_PROGRESS.music,
+        masterVolume: clampVolume(parsed.masterVolume, DEFAULT_PROGRESS.masterVolume!),
+        musicVolume: clampVolume(parsed.musicVolume, DEFAULT_PROGRESS.musicVolume!),
+        sfxVolume: clampVolume(parsed.sfxVolume, DEFAULT_PROGRESS.sfxVolume!),
         coins: clampInt(parsed.coins, 0, Number.MAX_SAFE_INTEGER, DEFAULT_PROGRESS.coins),
         completedLevels: completed,
         stars,

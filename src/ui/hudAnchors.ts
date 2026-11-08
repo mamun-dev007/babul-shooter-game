@@ -32,7 +32,7 @@ export const PROGRESS_WIDTH = 316;
  * circle and ~50% stays outside.
  */
 export const PLUS_BUTTON_RADIUS = 12;
-export const PLUS_BUTTON_HIT_RADIUS = 22;
+export const PLUS_BUTTON_HIT_RADIUS = 12;
 export const PLUS_BUTTON_OFFSET_X = 18.5;
 export const PLUS_BUTTON_OFFSET_Y = 18.5;
 /** Power-button radius (mirrors HUD POWER_BUTTON_RADIUS) for plus offset math. */

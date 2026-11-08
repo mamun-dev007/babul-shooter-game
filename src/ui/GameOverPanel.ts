@@ -1,7 +1,8 @@
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../game/config';
 import { gameAudio } from '../game/audio/GameAudio';
 import { acquireModalInputLock, releaseModalInputLock } from '../game/input/modalInputLock';
-import { loadProgress } from '../game/utils/storage';
+import { addCoins, loadProgress } from '../game/utils/storage';
+import { showRewardedAd } from '../ads/rewardedAds';
 import { addPressFx } from './uiFx';
 import { uiFitScale } from '../game/responsive';
 
@@ -23,6 +24,8 @@ export interface GameOverPanelOptions {
     onPrimary: () => void;
     onSecondary: () => void;
     onReplay?: () => void;
+    /** Rewarded-ad continue (FAIL popup); resolves with the ad outcome. */
+    onContinue?: () => Promise<'granted' | 'failed' | 'unavailable' | 'busy'>;
 }
 
 export class GameOverPanel {
@@ -30,6 +33,10 @@ export class GameOverPanel {
     private container: Phaser.GameObjects.Container | null = null;
     private tracked: Phaser.GameObjects.GameObject[] = [];
     private actionLocked = false;
+    private multiplierClaimed = false;
+    private multiplierBusy = false;
+    private continueBusy = false;
+    private continueStatus: Phaser.GameObjects.Text | null = null;
 
     get isOpen(): boolean {
         return this.container !== null;
@@ -49,6 +56,10 @@ export class GameOverPanel {
         this.container = container;
         this.tracked = [container];
         this.actionLocked = false;
+        this.multiplierClaimed = false;
+        this.multiplierBusy = false;
+        this.continueBusy = false;
+        this.continueStatus = null;
 
         const dim = scene.add
             .rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x02050d, 0.78)
@@ -92,9 +103,9 @@ export class GameOverPanel {
               };
 
         const card = scene.add.graphics();
-        // Both cards are tall: the three-button stack (46*3 / 60 + 46*2 plus
-        // gaps) must fit fully inside, without spilling past the bottom edge.
-        const cardBottom = 268;
+        // Won card is tall: header, stars, score, coin board and the
+        // three-button stack all fit fully inside without spilling.
+        const cardBottom = won ? 292 : 268;
         const cardHeight = cardBottom + 210;
 
         card.fillStyle(palette.shadow, 0.42);
@@ -253,76 +264,150 @@ export class GameOverPanel {
             this.tracked.push(record);
         }
 
-        if (options.coinReward !== undefined) {
-            const reward = scene.add
-                .text(0, options.newRecord && showStars ? 55 : 47, `STAR  ${stars}/3    COINS  +${options.coinReward}`, {
-                    fontFamily: FONT_DISPLAY,
-                    fontSize: '14px',
-                    color: '#ffd166',
-                })
-                .setOrigin(0.5);
-            container.add(reward);
-        }
+        if (won && options.coinReward !== undefined) {
+            // Coin Reward Board: matched to the Score Board width (264),
+            // compact 52px height — left = coin icon + COINS EARNED (normal
+            // reward already credited), right = 3X WATCH AD button.
+            const board = scene.add.graphics();
+            board.fillStyle(0x020617, 0.28);
+            board.fillRoundedRect(-132, 53, 264, 52, 14);
+            board.fillGradientStyle(0x2a4a7a, 0x2a4a7a, 0x1c3255, 0x1c3255, 1);
+            board.fillRoundedRect(-132, 51, 264, 52, 14);
+            board.lineStyle(2, 0xffd166, 0.85);
+            board.strokeRoundedRect(-132, 51, 264, 52, 14);
+            board.lineStyle(2, 0xffffff, 0.25);
+            board.lineBetween(12, 57, 12, 97);
+            container.add(board);
 
-        if (options.win === true && (options.completionCoinReward ?? 0) > 0) {
-            const badge = scene.add.container(0, 254);
-            const badgeBg = scene.add.graphics();
-            badgeBg.fillStyle(0x020617, 0.45);
-            badgeBg.fillRoundedRect(-65, -10, 130, 24, 12);
-            badgeBg.fillGradientStyle(0xffe38a, 0xffe38a, 0xffb300, 0xffb300, 1);
-            badgeBg.fillRoundedRect(-65, -12, 130, 24, 12);
-            badgeBg.lineStyle(2, 0xffffff, 0.95);
-            badgeBg.strokeRoundedRect(-65, -12, 130, 24, 12);
-            const badgeCoin = scene.add.circle(-44, 0, 9, 0xffc928, 1).setStrokeStyle(2, 0xfff1a8, 1);
-            const badgeText = scene.add
-                .text(8, 0, `+${options.completionCoinReward} Coins`, {
-                    fontFamily: FONT_DISPLAY,
-                    fontSize: '12px',
-                    color: '#7c2d12',
-                })
-                .setOrigin(0.5);
-            badgeText.setName('completion-coins');
-            badge.add([badgeBg, badgeCoin, badgeText]);
-            badge.setScale(0);
-            container.add(badge);
-            this.tracked.push(badge);
-            scene.tweens.add({
-                targets: badge,
-                scaleX: 1,
-                scaleY: 1,
-                duration: 360,
-                delay: 450,
-                ease: 'Back.easeOut',
+            const coinIcon = scene.add.container(-108, 77);
+            const coinBg = scene.add.graphics();
+            coinBg.fillStyle(0x92400e, 1);
+            coinBg.fillEllipse(0, 2, 30, 24);
+            coinBg.fillGradientStyle(0xffe38a, 0xffe38a, 0xb45309, 0xb45309, 1);
+            coinBg.fillEllipse(0, 0, 28, 22);
+            coinBg.lineStyle(2, 0xfff6c9, 0.95);
+            coinBg.strokeEllipse(0, 0, 27, 21);
+            coinBg.fillStyle(0xffc928, 1);
+            coinBg.fillCircle(-2, -1, 5);
+            coinBg.fillStyle(0xffffff, 0.85);
+            coinBg.fillEllipse(-6, -4, 9, 5);
+            coinIcon.add(coinBg);
+            container.add(coinIcon);
+
+            const earnedLabel = scene.add.text(-88, 68, 'COINS EARNED', {
+                fontFamily: FONT, fontSize: '9px', color: '#bcd6f5',
+            }).setOrigin(0, 0.5);
+            const earnedValue = scene.add.text(-88, 84, `+${options.coinReward}`, {
+                fontFamily: FONT_DISPLAY, fontSize: '16px', color: '#ffe38a',
+                stroke: palette.scoreStroke, strokeThickness: 3,
+            }).setOrigin(0, 0.5);
+            earnedValue.setName('coins-earned-value');
+            container.add([earnedLabel, earnedValue]);
+
+            const adW = 120;
+            const adH = 30;
+            const adX = 72;
+            const adY = 77;
+            const adBg = scene.add.graphics();
+            const drawAd = (hover: boolean, claimed: boolean): void => {
+                adBg.clear();
+                adBg.fillStyle(0x020617, 0.45);
+                adBg.fillRoundedRect(adX - adW / 2, adY - adH / 2 + 3, adW, adH, adH / 2);
+                if (claimed) {
+                    adBg.fillStyle(0x64748b, 1);
+                } else {
+                    adBg.fillGradientStyle(hover ? 0x6d28d9 : 0x5b21b6, hover ? 0x6d28d9 : 0x5b21b6, hover ? 0x4c1d95 : 0x3b1270, hover ? 0x4c1d95 : 0x3b1270, 1);
+                }
+                adBg.fillRoundedRect(adX - adW / 2, adY - adH / 2, adW, adH, adH / 2);
+                adBg.lineStyle(2, 0xffffff, 0.9);
+                adBg.strokeRoundedRect(adX - adW / 2, adY - adH / 2, adW, adH, adH / 2);
+            };
+            drawAd(false, false);
+            const adText = scene.add.text(adX, adY, '3X WATCH AD', {
+                fontFamily: FONT_DISPLAY, fontSize: '11px', color: '#ffffff',
+                stroke: '#2e1065', strokeThickness: 3,
+            }).setOrigin(0.5);
+            adText.setName('ad-multiplier-button');
+            const adStatus = scene.add.text(adX + adW / 2, 115, '', {
+                fontFamily: FONT, fontSize: '9px', color: '#fde68a', align: 'center',
+            }).setOrigin(1, 0.5);
+            adStatus.setName('ad-multiplier-status');
+            const adHit = scene.add.rectangle(adX, adY, adW, adH, 0xffffff, 0.001)
+                .setInteractive({ useHandCursor: true });
+            adHit.on('pointerover', () => drawAd(true, this.multiplierClaimed));
+            adHit.on('pointerout', () => drawAd(false, this.multiplierClaimed));
+            adHit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
+                event.stopPropagation();
+                if (this.multiplierClaimed || this.multiplierBusy) return;
+                this.multiplierBusy = true;
+                adText.setText('LOADING…');
+                adStatus.setText('Watch the ad to triple your reward!');
+                void (async (): Promise<void> => {
+                    const outcome = await showRewardedAd();
+                    this.multiplierBusy = false;
+                    // Panel/navigation may have left while the ad played.
+                    if (!this.isOpen || this.container !== container) {
+                        return;
+                    }
+                    if (outcome !== 'granted') {
+                        adText.setText('3X WATCH AD');
+                        adStatus.setText(outcome === 'unavailable' ? 'Ad unavailable — no bonus.' : 'No reward — ad not completed.');
+                        drawAd(false, false);
+                        return;
+                    }
+                    // Single grant of the +2x top-up (5 -> 15 total), once.
+                    this.multiplierClaimed = true;
+                    addCoins(options.coinReward! * 2);
+                    gameAudio.playSfx('star');
+                    earnedValue.setText(`+${options.coinReward! * 3}`);
+                    adText.setText('3X CLAIMED');
+                    adStatus.setText(`+${options.coinReward! * 2} Coins Added!`);
+                    drawAd(false, true);
+                    adHit.disableInteractive();
+                })();
             });
+            container.add([adBg, adText, adStatus, adHit]);
         }
 
         if (!won) {
             this.createFailureButton(container, 0, 104, options.replayLabel ?? 'RETRY', 'red', options.onReplay ?? options.onPrimary);
-            this.createFailureButton(container, 0, 162, 'Continue', 'gold', () => undefined, options.continuationEnabled === false);
+            const continueEnabled = !!options.onContinue && options.continuationEnabled !== false;
+            const continueStatus = scene.add.text(0, 298, '', {
+                fontFamily: FONT_DISPLAY,
+                fontSize: '10px',
+                color: '#fde68a',
+                align: 'center',
+            }).setOrigin(0.5).setVisible(false);
+            container.add(continueStatus);
+            this.continueStatus = continueStatus;
+            const continueBtn = this.createFailureButton(container, 0, 162, 'Continue', 'gold', () => {
+                if (!continueEnabled) {
+                    return;
+                }
+                void this.continueWithAd(container, continueBtn, options);
+            }, !continueEnabled, true);
+            if (!continueEnabled) {
+                continueStatus.setText('CONTINUE WITH AD  •  UNAVAILABLE');
+                continueStatus.setColor('#718096');
+                continueStatus.setVisible(true);
+            }
             this.createButton(container, 0, 220, 280, 46, options.secondaryLabel, false, options.onSecondary);
         } else {
-            // All three buttons sit fully inside the (taller) card.
-            this.createButton(container, 0, 102, 300, 60, options.primaryLabel, true, options.onPrimary);
+            // All three buttons sit fully inside the (taller) card, below
+            // the coin board in NEXT LEVEL / REPLAY / LEVEL MAP order.
+            // NEXT LEVEL matches REPLAY's size (280x46).
+            this.createButton(container, 0, 148, 280, 46, options.primaryLabel, true, options.onPrimary);
 
             if (options.replayLabel && options.onReplay) {
-                this.createButton(container, 0, 165, 280, 46, options.replayLabel, false, options.onReplay);
-                this.createButton(container, 0, 221, 280, 46, options.secondaryLabel, false, options.onSecondary);
+                this.createButton(container, 0, 206, 280, 46, options.replayLabel, false, options.onReplay);
+                this.createButton(container, 0, 262, 280, 46, options.secondaryLabel, false, options.onSecondary);
             } else {
-                this.createButton(container, 0, 170, 280, 46, options.secondaryLabel, false, options.onSecondary);
+                this.createButton(container, 0, 206, 280, 46, options.secondaryLabel, false, options.onSecondary);
             }
         }
 
         if (options.win === false && options.continuationEnabled === false) {
-            const disabled = scene.add
-                .text(0, 298, 'CONTINUE WITH AD  •  UNAVAILABLE', {
-                    fontFamily: FONT_DISPLAY,
-                    fontSize: '10px',
-                    color: '#718096',
-                    align: 'center',
-                })
-                .setOrigin(0.5);
-            disabled.setAlpha(0.75);
-            container.add(disabled);
+            // Legacy disabled note (no onContinue configured).
         }
 
         container.setAlpha(0);
@@ -336,6 +421,35 @@ export class GameOverPanel {
             duration: 260,
             ease: 'Back.easeOut',
         });
+    }
+
+    /**
+     * FAIL-popup Continue: runs the scene's rewarded-ad flow (which grants
+     * exactly 3 balls and resumes the attempt on success) and reports the
+     * outcome inline. Repeat clicks and duplicate callbacks are blocked by
+     * both the local busy guard and the scene's ad lock.
+     */
+    private async continueWithAd(container: Phaser.GameObjects.Container, button: Phaser.GameObjects.Container, options: GameOverPanelOptions): Promise<void> {
+        if (this.continueBusy || !options.onContinue) {
+            return;
+        }
+        this.continueBusy = true;
+        const label = button.getByName('continue-label') as Phaser.GameObjects.Text | null;
+        label?.setText('LOADING…');
+        const outcome = await options.onContinue();
+        this.continueBusy = false;
+        if (!this.isOpen || this.container !== container) {
+            return;
+        }
+        label?.setText('CONTINUE');
+        if (outcome === 'granted') {
+            return;
+        }
+        this.continueStatus?.setText(
+            outcome === 'unavailable' ? 'Ad unavailable — no balls added.' : 'Ad not completed — no balls added.'
+        );
+        this.continueStatus?.setColor('#fde68a');
+        this.continueStatus?.setVisible(true);
     }
 
     hide(): void {
@@ -483,8 +597,9 @@ export class GameOverPanel {
             label: string,
             color: 'red' | 'gold',
             onClick: () => void,
-            disabled = false
-        ): void {
+            disabled = false,
+            repeatable = false
+        ): Phaser.GameObjects.Container {
             const width = 280;
             const height = 46;
             const button = this.scene.add.container(x, y);
@@ -503,6 +618,14 @@ export class GameOverPanel {
             graphics.strokeRoundedRect(-width / 2, -height / 2, width, height, height / 2);
 
             const icon = red ? '↻' : '▶';
+            const labelText = this.scene.add.text(10, -1, label.toUpperCase(), {
+                fontFamily: FONT_DISPLAY,
+                fontSize: '14px',
+                color: '#ffffff',
+                stroke: red ? '#8f2638' : '#bd6d18',
+                strokeThickness: 3,
+            }).setOrigin(0.5);
+            labelText.setName('continue-label');
             button.add([
                 graphics,
                 this.scene.add.text(-104, -1, icon, {
@@ -510,13 +633,7 @@ export class GameOverPanel {
                     fontSize: '24px',
                     color: '#ffffff',
                 }).setOrigin(0.5),
-                this.scene.add.text(10, -1, label.toUpperCase(), {
-                    fontFamily: FONT_DISPLAY,
-                    fontSize: '14px',
-                    color: '#ffffff',
-                    stroke: red ? '#8f2638' : '#bd6d18',
-                    strokeThickness: 3,
-                }).setOrigin(0.5),
+                labelText,
             ]);
 
             if (!disabled) {
@@ -524,6 +641,13 @@ export class GameOverPanel {
                     .setInteractive({ useHandCursor: true });
                 hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
                     event.stopPropagation();
+                    if (repeatable) {
+                        // Repeat-safe (Continue): never locks the panel, so a
+                        // failed ad keeps the button clickable.
+                        if (this.continueBusy) return;
+                        onClick();
+                        return;
+                    }
                     if (this.actionLocked) return;
                     this.actionLocked = true;
                     onClick();
@@ -534,6 +658,7 @@ export class GameOverPanel {
                 button.setAlpha(0.72);
             }
             container.add(button);
+            return button;
         }
 
         private createButton(

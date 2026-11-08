@@ -6,6 +6,7 @@ export interface PowerUpInventory {
 }
 
 const STORAGE_KEY = 'bubble-shooter-powerups.v1';
+const BOMB_FIRE_RESET_KEY = 'bubble-shooter-bomb-fire-reset.v1';
 
 const DEFAULT_INVENTORY: PowerUpInventory = {
     bomb: 3,
@@ -16,12 +17,29 @@ const DEFAULT_INVENTORY: PowerUpInventory = {
 
 let cached: PowerUpInventory | null = null;
 
+/**
+ * One-time migration (applied exactly once, then flagged): zeroes the
+ * saved Bomb and Fire quantities so old stock cannot reappear. Coins,
+ * other power-ups and progression are untouched; later grants stack from 0.
+ */
+function applyBombFireResetOnce(inv: PowerUpInventory): void {
+    try {
+        if (localStorage.getItem(BOMB_FIRE_RESET_KEY)) {
+            return;
+        }
+        inv.bomb = 0;
+        inv.fireball = 0;
+        localStorage.setItem(BOMB_FIRE_RESET_KEY, '1');
+    } catch {}
+}
+
 export function loadPowerUpInventory(): PowerUpInventory {
     if (cached) return cached;
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (!raw) {
             cached = { ...DEFAULT_INVENTORY };
+            applyBombFireResetOnce(cached);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
             return cached;
         }
@@ -32,6 +50,7 @@ export function loadPowerUpInventory(): PowerUpInventory {
             lightning: typeof parsed.lightning === 'number' ? Math.max(0, parsed.lightning) : DEFAULT_INVENTORY.lightning,
             fireball: typeof parsed.fireball === 'number' ? Math.max(0, parsed.fireball) : DEFAULT_INVENTORY.fireball,
         };
+        applyBombFireResetOnce(cached);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(cached));
         return cached;
     } catch {

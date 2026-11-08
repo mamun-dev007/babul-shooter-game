@@ -271,6 +271,11 @@ export class LevelSystem {
         return this.shotsRemaining;
     }
 
+    /** Restores the shots-used count for a Gameplay <-> Store round-trip. */
+    restoreShotsUsed(used: number): void {
+        this.shotsUsed = Math.min(this.maxShots, Math.max(0, Math.floor(Number(used) || 0)));
+    }
+
     registerShot(): boolean {
         if (this.shotsUsed >= this.maxShots) {
             return false;

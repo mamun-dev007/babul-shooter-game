@@ -30,10 +30,20 @@ const b = (bomb = 0, fireball = 0, colorChanger = 0): StoreReward['grants'] => {
 };
 
 // Rewards keep quantity in `reward` text for UI; grants mirror the same numbers.
-// Unit values: bomb 5, fire 8, color 5, extra shot 4 — bundles discount on top.
-export const STORE_PRODUCTS: readonly StoreProduct[] = [
+// Base unit prices: Bomb 50, Fire 75, Color Change 85, Extra Shot 5.
+export const UNIT_PRICES = { bomb: 50, fireball: 75, colorChanger: 85, extraShot: 5 } as const;
+
+/** Total coin price = unit price x quantity, summed over the reward. */
+export function calculateTotalPrice(grants: StoreReward['grants'], extraShots = 0): number {
+    return (grants.bomb ?? 0) * UNIT_PRICES.bomb
+        + (grants.fireball ?? 0) * UNIT_PRICES.fireball
+        + (grants.colorChanger ?? 0) * UNIT_PRICES.colorChanger
+        + extraShots * UNIT_PRICES.extraShot;
+}
+
+const RAW_STORE_PRODUCTS: readonly StoreProduct[] = [
     // A. Bomb Packs (10)
-    { id: 'bomb-small', name: 'Small Bomb Pack', category: 'bomb', price: 5, reward: { grants: b(1), description: '1 Bomb' }, icon: 'bomb' },
+    { id: 'bomb-small', name: '1 Bomb', category: 'bomb', price: 50, reward: { grants: b(1), description: '1 Bomb' }, icon: 'bomb' },
     { id: 'bomb-double', name: 'Double Bomb Pack', category: 'bomb', price: 10, reward: { grants: b(2), description: '2 Bombs' }, badge: 'POPULAR', icon: 'bomb' },
     { id: 'bomb-triple', name: 'Triple Bomb Pack', category: 'bomb', price: 15, reward: { grants: b(3), description: '3 Bombs' }, icon: 'bomb' },
     { id: 'bomb-mega', name: 'Mega Bomb Pack', category: 'bomb', price: 25, reward: { grants: b(5), description: '5 Bombs' }, badge: 'SALE', icon: 'bomb' },
@@ -44,7 +54,7 @@ export const STORE_PRODUCTS: readonly StoreProduct[] = [
     { id: 'bomb-power', name: 'Power Bomb Pack', category: 'bomb', price: 50, reward: { grants: b(12), description: '12 Bombs' }, icon: 'bomb' },
     { id: 'bomb-premium', name: 'Premium Bomb Pack', category: 'bomb', price: 100, reward: { grants: b(25), description: '25 Bombs' }, badge: 'BEST VALUE', icon: 'bomb' },
     // B. Fire Power Packs (10)
-    { id: 'fire-single', name: 'Single Fire', category: 'fire', price: 10, reward: { grants: b(0, 1), description: '1 Fire Power' }, icon: 'fire' },
+    { id: 'fire-single', name: '1 Fire', category: 'fire', price: 75, reward: { grants: b(0, 1), description: '1 Fire Power' }, icon: 'fire' },
     { id: 'fire-double', name: 'Double Fire', category: 'fire', price: 15, reward: { grants: b(0, 2), description: '2 Fire Powers' }, badge: 'POPULAR', icon: 'fire' },
     { id: 'fire-triple', name: 'Triple Fire', category: 'fire', price: 20, reward: { grants: b(0, 3), description: '3 Fire Powers' }, icon: 'fire' },
     { id: 'fire-starter', name: 'Fire Starter Pack', category: 'fire', price: 30, reward: { grants: b(0, 4), description: '4 Fire Powers' }, icon: 'fire' },
@@ -55,7 +65,7 @@ export const STORE_PRODUCTS: readonly StoreProduct[] = [
     { id: 'fire-ultimate', name: 'Ultimate Fire Pack', category: 'fire', price: 125, reward: { grants: b(0, 20), description: '20 Fire Powers' }, badge: 'NEW', icon: 'fire' },
     { id: 'fire-premium', name: 'Premium Fire Bundle', category: 'fire', price: 150, reward: { grants: b(0, 25), description: '25 Fire Powers' }, badge: 'BEST VALUE', icon: 'fire' },
     // C. Bubble Color Packs (10)
-    { id: 'color-5', name: '5 Color Changes', category: 'color', price: 25, reward: { grants: b(0, 0, 5), description: '5 Color Changes' }, icon: 'color' },
+    { id: 'single-color', name: '1 Color Change', category: 'color', price: 85, reward: { grants: b(0, 0, 1), description: '1 Color Change' }, icon: 'color' },
     { id: 'color-10', name: '10 Color Changes', category: 'color', price: 50, reward: { grants: b(0, 0, 10), description: '10 Color Changes' }, badge: 'POPULAR', icon: 'color' },
     { id: 'color-15', name: '15 Color Changes', category: 'color', price: 75, reward: { grants: b(0, 0, 15), description: '15 Color Changes' }, icon: 'color' },
     { id: 'color-20', name: '20 Color Changes', category: 'color', price: 100, reward: { grants: b(0, 0, 20), description: '20 Color Changes' }, icon: 'color' },
@@ -88,6 +98,17 @@ export const STORE_PRODUCTS: readonly StoreProduct[] = [
     { id: 'special-daily', name: 'Daily Special Bundle', category: 'special', price: 30, reward: { grants: b(1, 1, 3), extraShots: 3, description: '1 Bomb + 1 Fire + 3 Color + 3 Shots' }, badge: 'LIMITED', icon: 'special' },
     { id: 'special-mega-mystery', name: 'Mega Mystery Bundle', category: 'special', price: 150, reward: { grants: {}, description: 'Mega Mystery Reward' }, badge: 'BEST VALUE', mystery: true, icon: 'mystery' },
 ];
+
+/**
+ * Public catalog. Every quantity-based item's displayed price is computed as
+ * unit price x quantity (mystery boxes keep their fixed box price because
+ * their reward is random, not quantity-based).
+ */
+export const STORE_PRODUCTS: readonly StoreProduct[] = RAW_STORE_PRODUCTS.map((product) => (
+    product.mystery
+        ? product
+        : { ...product, price: calculateTotalPrice(product.reward.grants, product.reward.extraShots ?? 0) }
+));
 
 export const STORE_CATEGORIES: readonly { id: 'all' | StoreCategory; label: string }[] = [
     { id: 'all', label: 'ALL' },

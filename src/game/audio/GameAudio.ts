@@ -35,6 +35,9 @@ class GameAudio {
     private hidden = false;
     private soundEnabled = true;
     private musicEnabled = true;
+    private masterVolume = 1;
+    private musicVolume = 0.8;
+    private sfxVolume = 0.9;
     private musicBuffer: AudioBuffer | null = null;
     private musicSource: AudioBufferSourceNode | null = null;
     private musicRendering = false;
@@ -83,9 +86,20 @@ class GameAudio {
         const progress = loadProgress();
         this.soundEnabled = progress.sound;
         this.musicEnabled = progress.music;
+        this.masterVolume = progress.masterVolume ?? 1;
+        this.musicVolume = progress.musicVolume ?? 0.8;
+        this.sfxVolume = progress.sfxVolume ?? 0.9;
+        this.applyVolumes();
     }
 
-    /** Called from a real pointer/key gesture so mobile browsers allow audio. */
+    private applyVolumes(): void {
+        if (!this.context || !this.sfxBus || !this.musicBus) return;
+        const master = Math.max(0, Math.min(1, this.masterVolume));
+        this.sfxBus.gain.value = master * Math.max(0, Math.min(1, this.sfxVolume));
+        if (this.musicSource) {
+            this.rampMusic(MUSIC_LEVEL * master * Math.max(0, Math.min(1, this.musicVolume)), 0.2);
+        }
+    }
     unlock(): void {
         this.ensureContext();
 

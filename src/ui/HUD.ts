@@ -4,6 +4,7 @@ import { addPressFx } from './uiFx';
 export interface HudCallbacks {
     onPause: () => void;
     onPowerUp: (powerUp: PowerUpId) => boolean;
+    onPlusButton?: (id: PlusButtonId) => void;
 }
 
 export type PowerUpId = 'bomb' | 'colorChanger' | 'lightning' | 'fireball';
@@ -51,6 +52,7 @@ interface LiquidFillState {
 
 export class HUD {
     private readonly scene: Phaser.Scene;
+    private readonly callbacks: HudCallbacks;
     private readonly container: Phaser.GameObjects.Container;
     private readonly scoreValue: Phaser.GameObjects.Text;
     private readonly levelValue: Phaser.GameObjects.Text;
@@ -87,9 +89,13 @@ export class HUD {
     private fireLiquidMaskShape: Phaser.GameObjects.Graphics | null = null;
     private bombLiquidMaskShape: Phaser.GameObjects.Graphics | null = null;
     private fireChargeLabel: Phaser.GameObjects.Text | null = null;
+    private colorChargeLabel: Phaser.GameObjects.Text | null = null;
     private bombStatusLabel: Phaser.GameObjects.Text | null = null;
     private bombAvailable = false;
     private bombActive = false;
+    private bombCount = 0;
+    private fireballCount = 0;
+    private colorChangerCount = 0;
     private readonly onUpdate = (_time: number, delta: number): void => {
         this.animateLiquid(delta);
     };
@@ -104,6 +110,7 @@ export class HUD {
 
     constructor(scene: Phaser.Scene, callbacks: HudCallbacks) {
         this.scene = scene;
+        this.callbacks = callbacks;
 
         this.levelValue = scene.add.text(levelX(), CANVAS_TOP_ANCHOR, 'Lv. 1', {
             fontFamily: FONT,
@@ -207,10 +214,11 @@ export class HUD {
             if (liquid) contents.push(liquid);
 
             if (item.id === 'fireball') {
+                // Same badge position/size/style as the Bomb counter.
                 this.fireChargeLabel = scene.add
-                    .text(0, 21, '0%', {
+                    .text(0, 24, '0', {
                         fontFamily: FONT_DISPLAY,
-                        fontSize: '9px',
+                        fontSize: '8px',
                         color: '#ffffff',
                         stroke: '#123a35',
                         strokeThickness: 3,
@@ -220,7 +228,7 @@ export class HUD {
                 contents.push(icon, this.fireChargeLabel, hitArea);
             } else if (item.id === 'bomb') {
                 this.bombStatusLabel = scene.add
-                    .text(0, 24, 'OFF', {
+                    .text(0, 24, '0', {
                         fontFamily: FONT_DISPLAY,
                         fontSize: '8px',
                         color: '#f7e8d0',
@@ -232,7 +240,19 @@ export class HUD {
                     .setDepth(3);
                 contents.push(icon, this.bombStatusLabel, hitArea);
             } else {
-                contents.push(icon, hitArea);
+                // Color Change counter: same badge position/size/style as the
+                // Bomb and Fire counters, showing live inventory quantity.
+                this.colorChargeLabel = scene.add
+                    .text(0, 24, '0', {
+                        fontFamily: FONT_DISPLAY,
+                        fontSize: '8px',
+                        color: '#ffffff',
+                        stroke: '#123a35',
+                        strokeThickness: 3,
+                    })
+                    .setOrigin(0.5)
+                    .setDepth(3);
+                contents.push(icon, this.colorChargeLabel, hitArea);
             }
 
             hitArea.on('pointerdown', () => {
@@ -503,6 +523,51 @@ export class HUD {
         this.refreshBombVisuals();
     }
 
+    /**
+     * Shows shared inventory quantities below the Bomb, Fire and Color
+     * Change buttons (digits only, e.g. `3`), with liquid/glow ready while
+     * stock lasts.
+     */
+    setPowerUpCounts(bomb: number, fireball: number, colorChanger = 0): void {
+        this.bombCount = Math.max(0, Math.floor(bomb) || 0);
+        this.fireballCount = Math.max(0, Math.floor(fireball) || 0);
+        this.colorChangerCount = Math.max(0, Math.floor(colorChanger) || 0);
+        if (this.bombStatusLabel) {
+            this.bombStatusLabel.setText(String(this.bombCount));
+            this.bombStatusLabel.setAlpha(1);
+        }
+        if (this.fireChargeLabel) {
+            this.fireChargeLabel.setText(String(this.fireballCount));
+            this.fireChargeLabel.setAlpha(1);
+        }
+        if (this.colorChargeLabel) {
+            this.colorChargeLabel.setText(String(this.colorChangerCount));
+            this.colorChargeLabel.setAlpha(1);
+        }
+        const bombOn = this.bombCount > 0;
+        const fireOn = this.fireballCount > 0;
+        this.setLiquidTarget(this.bombLiquid, bombOn ? 100 : 0, bombOn ? 360 : 420);
+        if (bombOn) {
+            this.startReadyGlow(this.bombLiquid);
+        } else {
+            this.stopReadyGlow(this.bombLiquid);
+        }
+        const fireButton = this.powerUpButtons.get('fireball');
+        if (fireButton) {
+            this.scene.tweens.killTweensOf(fireButton);
+            fireButton.setScale(1);
+            if (fireOn) {
+                this.scene.tweens.add({ targets: fireButton, scale: 1.05, duration: 420, yoyo: true, repeat: -1 });
+            }
+        }
+        this.setLiquidTarget(this.fireLiquid, fireOn ? 100 : 0, 320);
+        if (fireOn) {
+            this.startReadyGlow(this.fireLiquid);
+        } else {
+            this.stopReadyGlow(this.fireLiquid);
+        }
+    }
+
     private refreshBombVisuals(): void {
         const button = this.powerUpButtons.get('bomb');
         const hit = this.powerUpHits.get('bomb');
@@ -523,9 +588,9 @@ export class HUD {
         icon.setTint(enabled ? 0xffffff : 0xeceff3);
 
         if (this.bombStatusLabel) {
-            this.bombStatusLabel.setText(this.bombActive ? 'READY' : enabled ? 'BOMB' : 'OFF');
-            this.bombStatusLabel.setAlpha(enabled ? 1 : 0.72);
-            this.bombStatusLabel.setColor(this.bombActive ? '#fff3c2' : enabled ? '#ffffff' : '#eef3f8');
+            this.bombStatusLabel.setText(String(this.bombCount));
+            this.bombStatusLabel.setAlpha(1);
+            this.bombStatusLabel.setColor('#ffffff');
         }
 
         this.setLiquidTarget(this.bombLiquid, enabled ? 100 : 0, enabled ? 360 : 420);
@@ -537,12 +602,16 @@ export class HUD {
     }
 
     /**
-     * Fire Power charge state follows the actual Fire charging system.
-     * Liquid fills 0–99%; 100% is fully filled/ready and empties smoothly when consumed.
+     * Legacy charge entry (now driven by inventory): liquid fills while
+     * stock lasts; the button badge shows the Fire quantity.
      */
     setFireChargeProgress(percent: number): void {
         const target = Math.max(0, Math.min(100, percent));
         const ready = target >= 100;
+        if (this.fireChargeLabel) {
+            this.fireChargeLabel.setText(String(this.fireballCount));
+            this.fireChargeLabel.setAlpha(1);
+        }
         const button = this.powerUpButtons.get('fireball');
 
         if (button) {
@@ -715,11 +784,12 @@ export class HUD {
             // outside this circle, so power taps still work.
             .setDepth(5);
 
-        // Visual only: press feedback comes from addPressFx; no callbacks.
+        // Plus badges open the Coin Store instantly (handled by the scene);
+        // no press-scale animation so navigation feels immediate.
         hit.on('pointerdown', () => {
-            // Intentionally no purchase/ad/reward/charge action for now.
+            this.callbacks.onPlusButton?.(id);
         });
-        addPressFx(this.scene, hit, button, { hoverScale: 1.06, pressScale: 0.92 });
+        addPressFx(this.scene, hit, button, { hoverScale: 1, pressScale: 1 });
 
         button.add([graphics, hit]);
         button.setSize(PLUS_BUTTON_HIT_RADIUS * 2, PLUS_BUTTON_HIT_RADIUS * 2);

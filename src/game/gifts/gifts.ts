@@ -1,6 +1,7 @@
 import { addCoins } from '../utils/storage';
 import { grantPowerUp } from '../powerups/inventory';
 import type { PowerUpInventory } from '../powerups/inventory';
+import { recordCollectedCard } from '../collected/collected';
 
 /**
  * Gift Items catalogue. Free gifts reset daily; rewarded-ad gifts pay per
@@ -164,6 +165,8 @@ export function grantGiftReward(gift: GiftItem, reward: GiftReward, now: Date = 
 
     if (gift.type === 'ad') {
         startAdCooldown(gift, now);
+        // Successful confirmed collection for the daily Collected Items.
+        recordCollectedCard('gift', gift.id, now);
         return true;
     }
 
@@ -174,6 +177,7 @@ export function grantGiftReward(gift: GiftItem, reward: GiftReward, now: Date = 
     }
 
     persist(state);
+    recordCollectedCard('gift', gift.id, now);
     return true;
 }
 

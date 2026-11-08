@@ -391,6 +391,20 @@ export class GridSystem {
         return bubbles;
     }
 
+    /**
+     * Replaces every cell with a saved board (Gameplay <-> Store round-trip).
+     * Restored bubbles sit instantly (no spawn animation) at their saved cells.
+     */
+    restoreCells(cells: { row: number; col: number; color: BubbleColorName }[]): void {
+        this.getBubbles().forEach((bubble) => bubble.destroy());
+        this.rebuildCells();
+        cells.forEach((cell) => {
+            if (this.isInside(cell.row, cell.col)) {
+                this.spawnBubble(cell.row, cell.col, cell.color);
+            }
+        });
+    }
+
     isEmpty(): boolean {
         return this.getBubbles().length === 0;
     }

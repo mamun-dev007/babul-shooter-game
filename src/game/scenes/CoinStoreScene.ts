@@ -4,7 +4,7 @@ import { loadProgress, addCoins, canClaimDailyCoins, claimDailyCoins, addPending
 import { grantPowerUp, loadPowerUpInventory } from '../powerups/inventory';
 import type { PowerUpInventory } from '../powerups/inventory';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
-import { fadeInScene, goToScene } from './transitions';
+import { fadeInScene, goToScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { attachRelayout, worldHeight, worldWidth } from '../layout';
 import { STORE_PRODUCTS, rollMysteryReward, type StoreCategory, type StoreProduct, type StoreReward } from '../store/catalog';
@@ -16,6 +16,8 @@ export interface CoinStoreSceneData {
     returnTo?: string;
     level?: number;
     category?: CategoryFilter;
+    instant?: boolean;
+    snapshot?: import('../utils/gameplaySnapshot').GameplaySnapshot;
 }
 
 type CategoryFilter = 'all' | StoreCategory | 'real';
@@ -24,7 +26,7 @@ const DRAG_THRESHOLD = 10;
 const GRID_TOP_WIDE = 160;
 const GRID_TOP_MOBILE = 310;
 /** Coins granted only after a rewarded ad confirms the reward. */
-const REWARDED_AD_COINS = 5;
+const REWARDED_AD_COINS = 20;
 /** Top edge of the single scrollable content area (below the fixed header). */
 const SCROLL_TOP = 76;
 
@@ -33,6 +35,8 @@ export class CoinStoreScene extends Scene {
     private purchasing = false;
     private returnTo = 'MenuScene';
     private returnLevel = 0;
+    private instantOpen = false;
+    private gameplaySnapshot: import('../utils/gameplaySnapshot').GameplaySnapshot | null = null;
     private coinsText!: Phaser.GameObjects.Text;
     private sidebarBalanceText!: Phaser.GameObjects.Text;
     private earnedText!: Phaser.GameObjects.Text;
@@ -62,6 +66,8 @@ export class CoinStoreScene extends Scene {
     init(data: CoinStoreSceneData = {}): void {
         this.returnTo = data.returnTo ?? 'MenuScene';
         this.returnLevel = Number.isFinite(data.level) ? (data.level ?? 0) : 0;
+        this.instantOpen = data.instant === true;
+        this.gameplaySnapshot = data.snapshot ?? null;
         if (data.category) {
             this.category = data.category;
         }
@@ -84,9 +90,12 @@ export class CoinStoreScene extends Scene {
         this.createCategoryDropdown();
         this.buildGrid();
         this.bindScrollInput();
-        fadeInScene(this, 240, [5, 57, 91]);
+        // Gameplay plus-button navigation is instant: skip the fade-in.
+        if (!this.instantOpen) {
+            fadeInScene(this, 240, [5, 57, 91]);
+        }
         attachRelayout(this, () => {
-            this.scene.restart({ returnTo: this.returnTo, level: this.returnLevel, category: this.category });
+            this.scene.restart({ returnTo: this.returnTo, level: this.returnLevel, category: this.category, instant: this.instantOpen, snapshot: this.gameplaySnapshot });
         });
         this.events.once('shutdown', () => {
             this.popup = null;
@@ -118,20 +127,26 @@ export class CoinStoreScene extends Scene {
 
     private get cardHeight(): number {
         const cols = this.storeColumns;
-        return cols === 1 ? 180 : cols === 2 ? 200 : 210;
+        return cols === 1 ? 180 : cols === 2 ? 194 : 204;
     }
 
     private get gridOrigin(): { x: number; y: number; w: number; h: number } {
         const width = worldWidth();
         const height = worldHeight();
+        const sidePad = 39;
         if (this.isWide) {
-            const x = 290;
+            // Centred grid with an appropriate maximum width — cards are
+            // narrower with equal margins on both sides of the main area.
+            const maxGridW = 1024 - 30;
+            const areaW = width - 290;
+            const gridW = Math.min(areaW - sidePad * 2, maxGridW);
+            const x = 290 + Math.floor((areaW - gridW) / 2);
             const y = GRID_TOP_WIDE;
-            return { x, y, w: width - x - 20, h: height - y - 16 };
+            return { x, y, w: gridW, h: height - y - 16 };
         }
 
         const y = GRID_TOP_MOBILE;
-        return { x: 16, y, w: width - 32, h: height - y - 16 };
+        return { x: sidePad, y, w: width - sidePad * 2, h: height - y - 16 };
     }
 
     private createBackground(): void {
@@ -436,7 +451,7 @@ export class CoinStoreScene extends Scene {
                 this.closeCategoryDropdown();
                 if (this.category !== option.id) {
                     this.category = option.id;
-                    this.scene.restart({ returnTo: this.returnTo, level: this.returnLevel, category: option.id });
+                    this.scene.restart({ returnTo: this.returnTo, level: this.returnLevel, category: option.id, instant: this.instantOpen, snapshot: this.gameplaySnapshot });
                 }
             });
             panel.add([text, hit]);
@@ -538,7 +553,7 @@ export class CoinStoreScene extends Scene {
             .setOrigin(0.5);
         rewardText.setName('rewarded-coins');
         const freeLabel = this.add
-            .text(leftCenter, 14, 'Free Reward', { fontFamily: FONT, fontSize: '12px', color: '#e0fbff', stroke: '#075a8a', strokeThickness: 2 })
+            .text(leftCenter, 14, 'for Free', { fontFamily: FONT, fontSize: '12px', color: '#e0fbff', stroke: '#075a8a', strokeThickness: 2 })
             .setOrigin(0.5);
         freeLabel.setName('rewarded-label');
         card.add([rewardText, freeLabel]);
@@ -649,33 +664,59 @@ export class CoinStoreScene extends Scene {
             card.add([badge, badgeText]);
         }
 
-        // LEFT: coin amount, bonus rewards and offer details, grouped and
-        // vertically centred in the left section.
-        const coinIcon = this.add.circle(leftCenter, -44, 23, 0xffc928, 1).setStrokeStyle(4, 0xfff1a8, 1);
-        const coinText = this.add.text(leftCenter, -44, '$', { fontFamily: FONT_DISPLAY, fontSize: '21px', color: '#78350f' }).setOrigin(0.5);
-        this.tweens.add({ targets: coinIcon, scaleX: 1.1, scaleY: 1.1, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-        card.add([coinIcon, coinText]);
+        // LEFT: large golden coin stack, bonus rewards and offer details,
+        // grouped and vertically centred in the left section.
+        const coinCx = leftCenter + 8;
+        const coinCy = -54;
+        const coinR = Math.min(32, Math.max(22, sectionW / 2 - 6));
+        const coinShine = this.add.graphics();
+        const drawGoldCoin = (x: number, y: number, r: number): void => {
+            coinShine.fillStyle(0x92400e, 1);
+            coinShine.fillEllipse(x, y + 3, r * 2.6, r * 2);
+            coinShine.fillGradientStyle(0xffe38a, 0xffe38a, 0xb45309, 0xb45309, 1);
+            coinShine.fillEllipse(x, y, r * 2.6, r * 2);
+            coinShine.lineStyle(2, 0xfff6c9, 0.95);
+            coinShine.strokeEllipse(x, y, r * 2.5, r * 1.9);
+            coinShine.fillStyle(0xffe38a, 1);
+            coinShine.fillEllipse(x, y, r * 2.0, r * 1.45);
+            coinShine.lineStyle(1.5, 0xd97706, 0.9);
+            coinShine.strokeEllipse(x, y, r * 1.9, r * 1.35);
+            coinShine.fillStyle(0xffc928, 1);
+            coinShine.fillCircle(x - r * 0.15, y, r * 0.42);
+            coinShine.fillStyle(0xffffff, 0.85);
+            coinShine.fillEllipse(x - r * 0.5, y - r * 0.35, r * 0.75, r * 0.4);
+        };
+        // Neat, balanced stack of large premium coins (back row first).
+        // Subtle static golden glow behind the stack (no animation/blur).
+        coinShine.fillStyle(0xfff6c9, 0.28);
+        coinShine.fillEllipse(coinCx, coinCy + coinR * 0.2, coinR * 3.0, coinR * 2.0);
+        coinShine.fillStyle(0xffe38a, 0.3);
+        coinShine.fillEllipse(coinCx, coinCy + coinR * 0.2, coinR * 2.5, coinR * 1.6);
+        drawGoldCoin(coinCx - coinR * 0.7, coinCy + coinR * 0.55, coinR * 0.72);
+        drawGoldCoin(coinCx + coinR * 0.7, coinCy + coinR * 0.55, coinR * 0.72);
+        drawGoldCoin(coinCx, coinCy + coinR * 0.15, coinR);
+        card.add(coinShine);
 
         const title = this.add
-            .text(leftCenter, -12, pkg.name, { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 3, align: 'center', wordWrap: { width: sectionW - 16 } })
+            .text(leftCenter, -10, pkg.name, { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 3, align: 'center', wordWrap: { width: sectionW - 16 } })
             .setOrigin(0.5);
         const totalCoins = this.add
-            .text(leftCenter, 10, `${pkg.coins.toLocaleString('en-US')} Coins + Bonus`, { fontFamily: FONT_DISPLAY, fontSize: '12px', color: '#fff8e1', stroke: '#7c2d12', strokeThickness: 2, align: 'center', wordWrap: { width: sectionW - 16 } })
+            .text(leftCenter, 12, `${pkg.coins.toLocaleString('en-US')} Coins + Bonus`, { fontFamily: FONT_DISPLAY, fontSize: '12px', color: '#fff8e1', stroke: '#7c2d12', strokeThickness: 2, align: 'center', wordWrap: { width: sectionW - 16 } })
             .setOrigin(0.5);
         const bonus = this.add
-            .text(leftCenter, 28, `+ ${pkg.grants.bomb || 0} Bombs  + ${pkg.grants.fireball || 0} Fire  + ${pkg.grants.colorChanger || 0} Color`, { fontFamily: FONT, fontSize: '10px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2, align: 'center', wordWrap: { width: sectionW - 12 } })
+            .text(leftCenter, 30, `+ ${pkg.grants.bomb || 0} Bombs  + ${pkg.grants.fireball || 0} Fire  + ${pkg.grants.colorChanger || 0} Color`, { fontFamily: FONT, fontSize: '10px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2, align: 'center', wordWrap: { width: sectionW - 12 } })
             .setOrigin(0.5);
         card.add([title, totalCoins, bonus]);
 
         const icons: Phaser.GameObjects.GameObject[] = [];
         if (this.textures.exists('powerup-bomb')) {
-            icons.push(this.add.image(leftCenter - 36, 58, 'powerup-bomb').setDisplaySize(26, 26));
+            icons.push(this.add.image(leftCenter - 36, 60, 'powerup-bomb').setDisplaySize(26, 26));
         }
         if (this.textures.exists('icon-fire')) {
-            icons.push(this.add.image(leftCenter, 58, 'icon-fire').setDisplaySize(26, 26));
+            icons.push(this.add.image(leftCenter, 60, 'icon-fire').setDisplaySize(26, 26));
         }
         if (this.textures.exists('powerup-color')) {
-            icons.push(this.add.image(leftCenter + 36, 58, 'powerup-color').setDisplaySize(26, 26));
+            icons.push(this.add.image(leftCenter + 36, 60, 'powerup-color').setDisplaySize(26, 26));
         }
         card.add(icons);
 
@@ -808,7 +849,9 @@ export class CoinStoreScene extends Scene {
             buyBg.strokeRoundedRect(buyX - buyW / 2, buyY - 17, buyW, 34, 17);
         };
         drawBuy(false);
-        const buyText = this.add.text(buyX, buyY, 'BUY NOW', { fontFamily: FONT_DISPLAY, fontSize: buyW < 80 ? '11px' : '13px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 3 }).setOrigin(0.5);
+        // Coin purchases use a simple BUY label (distinct from real-money
+        // BUY NOW buttons) with the total price on the pill above it.
+        const buyText = this.add.text(buyX, buyY, 'BUY', { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 3 }).setOrigin(0.5);
         buyText.setName(`buy-${pkg.id}`);
         const buyHit = this.add.rectangle(buyX, buyY, buyW, 34, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
         buyHit.setData('buyPackage', pkg.id);
@@ -1018,7 +1061,7 @@ export class CoinStoreScene extends Scene {
         this.purchasing = true;
         const coins = loadProgress().coins;
         if (coins < pkg.price) {
-            this.showPopup('Not Enough Coins', `You need ${pkg.price} coins, but you have ${coins}.`, false);
+            this.showPopup('NOT ENOUGH COINS', `You need ${pkg.price.toLocaleString('en-US')} coins, but you have ${coins.toLocaleString('en-US')}.`, false);
             return;
         }
 
@@ -1201,7 +1244,9 @@ export class CoinStoreScene extends Scene {
 
         this.locked = true;
         if (this.returnTo === 'GameScene') {
-            goToScene(this, this.returnTo, { level: this.returnLevel }, 180);
+            // Instant return: GameScene rebuilds and restores the exact
+            // attempt from the hand-off snapshot — no fade, no restart.
+            goToSceneInstant(this, 'GameScene', { level: this.returnLevel, instant: true, snapshot: this.gameplaySnapshot });
         } else {
             goToScene(this, this.returnTo, undefined, 180);
         }

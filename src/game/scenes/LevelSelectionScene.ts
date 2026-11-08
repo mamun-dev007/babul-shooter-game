@@ -3,7 +3,6 @@ import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { LEVELS } from '../data/levels';
 import {
     buildLevelMap,
-    levelMapPageScroll,
     levelMapCenterScroll,
     mapScrollBounds,
     levelMapPositionAt,
@@ -14,13 +13,26 @@ import {
     resolveLevelProgressState,
     type LevelProgressState,
 } from '../data/levels/progress';
-import { loadProgress, type Progress } from '../utils/storage';
+import { loadProgress, addCoins, type Progress } from '../utils/storage';
 import { installUiAudio } from '../audio/GameAudio';
 import { fadeInScene, goToScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { Button } from '../../ui/design';
 import { drawVectorIcon, type VectorIcon } from '../../ui/vectorIcons';
 import { attachRelayout, mapViewTopY, mapViewBottomY, worldWidth, worldHeight } from '../layout';
+import {
+    STARTER_PACK_COINS,
+    STARTER_PACK_PRICE_BDT,
+    STARTER_PACK_TITLE,
+    formatOfferCountdown,
+    getStarterPackDeadline,
+    isStarterPackExpired,
+    starterPackRemainingMs,
+} from '../offers/starterPack';
+import { requestPurchase, verifyTransaction, hasProcessedTransaction, markTransactionProcessed } from '../payments/payments';
+import type { RealMoneyProduct } from '../store/realMoneyCatalog';
+import { acquireModalInputLock, releaseModalInputLock } from '../input/modalInputLock';
+import { claimCollectedReward, getCollectedCount, isCollectedRewardAvailable, loadCollectedState } from '../collected/collected';
 
 let VIEW_TOP = mapViewTopY();
 let VIEW_BOTTOM = mapViewBottomY();
@@ -47,10 +59,20 @@ export class LevelSelectionScene extends Scene {
     private coinBalanceText!: Phaser.GameObjects.Text;
     private collectFill!: Phaser.GameObjects.Graphics;
     private collectPercentText!: Phaser.GameObjects.Text;
+    private collectClaimBtn: Phaser.GameObjects.Container | null = null;
+    private collectClaimedText: Phaser.GameObjects.Text | null = null;
     private currentLevelIndex = 0;
     private infoPanel: Phaser.GameObjects.Container | null = null;
     private dailyPopup: Phaser.GameObjects.Container | null = null;
     private dailyPopupTimer: Phaser.Time.TimerEvent | null = null;
+    private starterPopup: Phaser.GameObjects.Container | null = null;
+    private starterTimer: Phaser.Time.TimerEvent | null = null;
+    private starterTimeText: Phaser.GameObjects.Text | null = null;
+    private starterBuyText: Phaser.GameObjects.Text | null = null;
+    private starterBuyBg: Phaser.GameObjects.Graphics | null = null;
+    private starterStatusText: Phaser.GameObjects.Text | null = null;
+    private starterBuyDisabled = false;
+    private starterPurchasing = false;
     private selectedRing!: Phaser.GameObjects.Graphics;
 
     constructor() {
@@ -67,7 +89,20 @@ export class LevelSelectionScene extends Scene {
         this.infoPanel = null;
         this.dailyPopup = null;
         this.dailyPopupTimer = null;
+        this.starterPopup = null;
+        this.starterTimer = null;
+        this.starterTimeText = null;
+        this.starterBuyText = null;
+        this.starterBuyBg = null;
+        this.starterStatusText = null;
+        this.starterBuyDisabled = false;
+        this.starterPurchasing = false;
         this.scrollTween = null;
+        // Offer clock always runs on the Level Path: start (or resume the
+        // persisted) 71:59:18 deadline now so it never pauses while the
+        // popup is closed or the player navigates the map.
+        getStarterPackDeadline();
+        this.starterTimer = this.time.addEvent({ delay: 1000, loop: true, callback: () => this.tickStarterPack() });
         this.progress = loadProgress();
         this.entries = buildLevelMap(LEVELS, this.progress);
         this.currentLevelIndex = this.entries.find((entry) => entry.state === 'unlocked')?.index ?? 0;
@@ -127,6 +162,19 @@ export class LevelSelectionScene extends Scene {
             this.scrollTween.remove();
             this.scrollTween = null;
         }
+
+        if (this.starterTimer) {
+            this.starterTimer.remove();
+            this.starterTimer = null;
+        }
+        this.starterTimeText = null;
+        this.starterBuyText = null;
+        this.starterBuyBg = null;
+        this.starterStatusText = null;
+        this.starterBuyDisabled = false;
+        this.starterPurchasing = false;
+        releaseModalInputLock('starter-pack');
+        this.starterPopup = null;
 
         this.infoPanel = null;
         this.tweens.killTweensOf(this.mapLayer);
@@ -349,19 +397,19 @@ if (entry.state === 'completed') {
         addCoins.on('pointerdown', () => this.goToCoinStore());
         this.hudLayer.add([addCoins, addCoinsText]);
 
-        // Collect Items panel with progress bar and gift icon.
+        // Collect Items panel with gift icon, X/15 counter and progress bar.
         const collectX = GAME_WIDTH / 2 - 160;
         const collectBg = this.add.graphics();
         collectBg.fillStyle(0x020617, 0.45);
-        collectBg.fillRoundedRect(collectX, 72, 320, 38, 19);
+        collectBg.fillRoundedRect(collectX, 72, 320, 66, 19);
         collectBg.fillStyle(0x1e1b4b, 0.96);
-        collectBg.fillRoundedRect(collectX, 69, 320, 38, 19);
+        collectBg.fillRoundedRect(collectX, 69, 320, 66, 19);
         collectBg.fillGradientStyle(0x3b1270, 0x3b1270, 0x1e1b4b, 0x1e1b4b, 1);
-        collectBg.fillRoundedRect(collectX + 4, 73, 312, 30, 15);
+        collectBg.fillRoundedRect(collectX + 4, 73, 312, 58, 15);
         collectBg.fillStyle(0xffffff, 0.14);
         collectBg.fillRoundedRect(collectX + 12, 75, 296, 11, 6);
         collectBg.lineStyle(2, 0xa855f7, 0.9);
-        collectBg.strokeRoundedRect(collectX, 69, 320, 38, 19);
+        collectBg.strokeRoundedRect(collectX, 69, 320, 66, 19);
         const giftIcon = this.add.graphics();
         giftIcon.fillStyle(0x020617, 0.4);
         giftIcon.fillCircle(GAME_WIDTH / 2 - 138, 90, 14);
@@ -384,13 +432,46 @@ if (entry.state === 'completed') {
             .setOrigin(0, 0.5);
         this.collectFill = this.add.graphics();
         this.collectPercentText = this.add
-            .text(GAME_WIDTH / 2 + 142, 88, '', {
+            .text(GAME_WIDTH / 2 + 148, 89, '0/15 CARDS', {
                 fontFamily: FONT_DISPLAY,
                 fontSize: '10px',
                 color: '#fde68a',
             })
-            .setOrigin(0.5);
-        this.hudLayer.add([collectBg, giftIcon, collectLabel, this.collectFill, this.collectPercentText]);
+            .setOrigin(1, 0.5);
+        this.collectPercentText.setName('collect-count');
+        // CLAIM 20 COINS button over the bar — only visible at 15/15.
+        const claimBtn = this.add.container(GAME_WIDTH / 2, 116);
+        const claimBg = this.add.graphics();
+        claimBg.fillStyle(0x020617, 0.45);
+        claimBg.fillRoundedRect(-79, -9, 158, 22, 11);
+        claimBg.fillGradientStyle(0x4ade80, 0x4ade80, 0x16a34a, 0x16a34a, 1);
+        claimBg.fillRoundedRect(-79, -11, 158, 22, 11);
+        claimBg.fillStyle(0xffffff, 0.22);
+        claimBg.fillRoundedRect(-71, -9, 142, 8, 4);
+        claimBg.lineStyle(2, 0xffffff, 0.95);
+        claimBg.strokeRoundedRect(-79, -11, 158, 22, 11);
+        const claimText = this.add.text(0, 0, 'CLAIM 20 COINS', {
+            fontFamily: FONT_DISPLAY,
+            fontSize: '10px',
+            color: '#ffffff',
+            stroke: '#14532d',
+            strokeThickness: 2,
+        }).setOrigin(0.5);
+        claimText.setName('collect-claim');
+        const claimHit = this.add.rectangle(0, 0, 158, 22, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+        claimHit.on('pointerdown', () => this.claimCollected());
+        claimBtn.add([claimBg, claimText, claimHit]);
+        this.collectClaimBtn = claimBtn;
+        const claimedText = this.add.text(GAME_WIDTH / 2, 116, '20 COINS CLAIMED ✓', {
+            fontFamily: FONT_DISPLAY,
+            fontSize: '11px',
+            color: '#86efac',
+            stroke: '#1e1b4b',
+            strokeThickness: 2,
+        }).setOrigin(0.5);
+        claimedText.setName('collect-claimed');
+        this.collectClaimedText = claimedText;
+        this.hudLayer.add([collectBg, giftIcon, collectLabel, this.collectFill, this.collectPercentText, claimBtn, claimedText]);
     }
 
     private createGlossyTopButton(
@@ -484,7 +565,7 @@ if (entry.state === 'completed') {
             if (this.locked || this.infoPanel) return;
             this.hideDailyPopup();
             this.locked = true;
-            goToScene(this, 'DailyTasksScene', { returnTo: 'LevelSelectionScene' }, 180);
+            goToSceneInstant(this, 'DailyTasksScene', { returnTo: 'LevelSelectionScene', instant: true });
         });
         popup.add([bg, label, hit]);
         this.dailyPopup = popup;
@@ -530,9 +611,9 @@ if (entry.state === 'completed') {
         const graphics = this.add.graphics();
         this.drawBlueGlossyCircle(graphics, 22);
         this.drawSideIcon(graphics, kind);
-        // Lock badge on every side button except Daily and Gift — both stay
-        // unlocked/enabled with their original icons restored.
-        if (title !== 'DAILY' && title !== 'GIFT') {
+        // Lock badge removed from the Starter Pack, Gift and Daily buttons —
+        // they stay unlocked/enabled with their original icons restored.
+        if (title !== 'DAILY' && title !== 'GIFT' && title !== 'STARTER') {
             graphics.fillStyle(0x64748b, 1);
             graphics.fillCircle(15, 15, 7);
             graphics.fillStyle(0xe5e7eb, 1);
@@ -561,10 +642,11 @@ if (entry.state === 'completed') {
         const hit = this.add.circle(0, 0, 26, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
         hit.setData('sideButton', true);
         if (title === 'DAILY') {
+            // Instant navigation: no fade/slide/zoom transition or delay.
             hit.on('pointerdown', () => {
                 if (this.locked || this.infoPanel) return;
                 this.locked = true;
-                goToScene(this, 'DailyTasksScene', { returnTo: 'LevelSelectionScene' }, 180);
+                goToSceneInstant(this, 'DailyTasksScene', { returnTo: 'LevelSelectionScene', instant: true });
             });
         } else if (title === 'GIFT') {
             // Instant navigation: no fade/slide/zoom transition or delay.
@@ -574,8 +656,17 @@ if (entry.state === 'completed') {
                 this.locked = true;
                 goToSceneInstant(this, 'GiftItemsScene', { returnTo: 'LevelSelectionScene', instant: true });
             });
+        } else if (title === 'STARTER') {
+            // STARTER (Status) button opens the Starter Pack offer popup
+            // directly — no other button or gameplay changes.
+            hit.on('pointerdown', () => {
+                if (this.locked || this.infoPanel || this.starterPopup) return;
+                this.hideDailyPopup();
+                this.showStarterPackPopup();
+            });
         } else {
             hit.on('pointerdown', () => {
+                if (this.starterPopup) return;
                 if (!this.infoPanel) {
                     this.toggleInfo();
                 }
@@ -689,7 +780,7 @@ if (entry.state === 'completed') {
     }
 
     private onPointerDown(pointer: Phaser.Input.Pointer): void {
-        if (this.locked || this.infoPanel || !this.inMapViewport(pointer.y)) {
+        if (this.locked || this.infoPanel || this.starterPopup || !this.inMapViewport(pointer.y)) {
             return;
         }
 
@@ -732,7 +823,7 @@ if (entry.state === 'completed') {
         _deltaX: number,
         deltaY: number
     ): void {
-        if (this.locked || this.infoPanel) {
+        if (this.locked || this.infoPanel || this.starterPopup) {
             return;
         }
 
@@ -854,35 +945,6 @@ if (entry.state === 'completed') {
     /* Scroll + selection                                                 */
     /* ---------------------------------------------------------------- */
 
-    private animateScroll(target: number): void {
-        this.killScrollTween();
-        const proxy = { value: this.scrollY };
-        this.scrollTween = this.tweens.add({
-            targets: proxy,
-            value: target,
-            duration: 280,
-            ease: 'Cubic.easeOut',
-            onUpdate: () => this.setScroll(proxy.value),
-        });
-    }
-
-    private scrollToLevel(index: number, animate: boolean): void {
-        const entry = this.entries[index];
-        if (!entry) {
-            return;
-        }
-
-        const clamped = levelMapPageScroll(index, this.entries.length, VIEW_TOP, VIEW_BOTTOM);
-
-        if (!animate) {
-            this.killScrollTween();
-            this.setScroll(clamped);
-            return;
-        }
-
-        this.animateScroll(clamped);
-    }
-
     /**
      * Instantly places `index` at the vertical centre of the visible map
      * area (VIEW_TOP..VIEW_BOTTOM), using its actual road position. The
@@ -903,7 +965,7 @@ if (entry.state === 'completed') {
     }
 
     private trySelect(index: number): void {
-        if (this.locked || this.dragMoved || this.infoPanel) {
+        if (this.locked || this.dragMoved || this.infoPanel || this.starterPopup) {
             return;
         }
 
@@ -915,11 +977,20 @@ if (entry.state === 'completed') {
         this.selectedLevel = index;
         this.placeMarker();
         this.refreshHud();
-        this.scrollToLevel(index, true);
+        this.openLevelInstantly(index);
+    }
+
+    /** Instant level open: no fade/slide/zoom transition or delay. */
+    private openLevelInstantly(index: number): void {
+        if (this.locked) {
+            return;
+        }
+        this.locked = true;
+        goToSceneInstant(this, 'GameScene', { level: index, instant: true });
     }
 
     private playSelected(): void {
-        if (this.locked || this.infoPanel) {
+        if (this.locked || this.infoPanel || this.starterPopup) {
             return;
         }
 
@@ -927,8 +998,7 @@ if (entry.state === 'completed') {
             return;
         }
 
-        this.locked = true;
-        goToScene(this, 'GameScene', { level: this.selectedLevel }, 200);
+        this.openLevelInstantly(this.selectedLevel);
     }
 
     private selectedState(): LevelProgressState {
@@ -942,13 +1012,15 @@ if (entry.state === 'completed') {
             this.coinBalanceText.setText(this.progress.coins.toLocaleString('en-US'));
         }
 
-        const completed = this.progress.completedLevels.length;
+        const collected = getCollectedCount();
+        const collectedState = loadCollectedState();
+        const rewardAvailable = isCollectedRewardAvailable();
 
         if (this.collectFill) {
-            const ratio = LEVELS.length > 0 ? completed / LEVELS.length : 0;
-            const barX = GAME_WIDTH / 2 - 30;
-            const barY = 88;
-            const barW = 140;
+            const ratio = collected / 15;
+            const barX = GAME_WIDTH / 2 - 125;
+            const barY = 116;
+            const barW = 250;
             const barH = 10;
             this.collectFill.clear();
             this.collectFill.fillStyle(0x02050d, 0.85);
@@ -963,14 +1035,420 @@ if (entry.state === 'completed') {
         }
 
         if (this.collectPercentText) {
-            const percent = LEVELS.length > 0 ? Math.round((completed / LEVELS.length) * 100) : 0;
-            this.collectPercentText.setText(`${percent}%`);
+            this.collectPercentText.setText(`${collected}/15 CARDS`);
         }
+        this.collectClaimBtn?.setVisible(rewardAvailable);
+        this.collectClaimedText?.setVisible(!rewardAvailable && collectedState.claimed && collected >= 15);
 
         const state = this.selectedState();
         const number = this.selectedLevel + 1;
         this.playButton.setDisabled(state === 'locked');
         this.playButton.setText(`Level ${number}`);
+    }
+
+    private claimCollected(): void {
+        if (this.locked || this.infoPanel || this.starterPopup) {
+            return;
+        }
+        if (claimCollectedReward()) {
+            this.refreshHud();
+        }
+    }
+
+    /** Starter Pack offer popup (reference-image design, no animation). */
+    private showStarterPackPopup(): void {
+        if (this.starterPopup) {
+            return;
+        }
+        acquireModalInputLock('starter-pack');
+        const width = worldWidth();
+        const height = worldHeight();
+        const cx = width / 2;
+        const cy = height / 2 - 24;
+        const popW = Math.min(340, width - 32);
+        const popH = Math.min(470, height - 90);
+        const top = cy - popH / 2;
+        this.starterBuyDisabled = isStarterPackExpired();
+        this.starterPurchasing = false;
+
+        const popup = this.add.container(0, 0).setDepth(70);
+        popup.setName('starter-pack-popup');
+        const dim = this.add.rectangle(width / 2, height / 2, width, height, 0x0f0a2e, 0.78).setInteractive();
+        const card = this.add.graphics();
+        // Card shadow + deep-navy frame + body + royal header.
+        card.fillStyle(0x020617, 0.55);
+        card.fillRoundedRect(cx - popW / 2, top + 10, popW, popH, 26);
+        card.fillStyle(0x1e1b4b, 1);
+        card.fillRoundedRect(cx - popW / 2 - 6, top - 6, popW + 12, popH + 12, 30);
+        card.lineStyle(4, 0xd4af37, 1);
+        card.strokeRoundedRect(cx - popW / 2 - 6, top - 6, popW + 12, popH + 12, 30);
+        card.fillStyle(0xffffff, 1);
+        card.fillRoundedRect(cx - popW / 2, top, popW, popH, 26);
+        // Header ribbon: slightly wider than the card, poking above it.
+        card.fillGradientStyle(0x4c1d95, 0x4c1d95, 0x1e1b4b, 0x1e1b4b, 1);
+        card.fillRoundedRect(cx - popW / 2 - 8, top - 6, popW + 16, 66, 18);
+        card.lineStyle(2, 0xd4af37, 0.95);
+        card.strokeRoundedRect(cx - popW / 2 - 8, top - 6, popW + 16, 66, 18);
+        card.fillStyle(0xd4af37, 1);
+        card.fillRect(cx - popW / 2 - 8, top + 52, popW + 16, 4);
+        card.fillGradientStyle(0xffffff, 0xffffff, 0xf3e8ff, 0xf3e8ff, 1);
+        card.fillRoundedRect(cx - popW / 2, top + 34, popW, popH - 34, 26);
+        card.lineStyle(3, 0xd4af37, 1);
+        card.strokeRoundedRect(cx - popW / 2, top + 28, popW, popH - 28, 26);
+        // Gilt corner diamonds (ornament) inside the card frame.
+        const corners: [number, number][] = [
+            [cx - popW / 2 + 16, top + 16], [cx + popW / 2 - 16, top + 16],
+            [cx - popW / 2 + 16, top + popH - 16 - 28], [cx + popW / 2 - 16, top + popH - 16 - 28],
+        ];
+        card.fillStyle(0xd4af37, 0.9);
+        corners.forEach(([ox, oy]) => {
+            card.fillTriangle(ox, oy - 7, ox + 7, oy, ox, oy + 7);
+            card.fillTriangle(ox, oy - 7, ox - 7, oy, ox, oy + 7);
+        });
+
+        const header = 64;
+        const bottomArea = 192;
+        const artworkH = Math.max(110, popH - header - bottomArea);
+        const artworkY = top + header;
+        const rays = this.add.graphics();
+        // Golden Treasure base: deep navy -> royal purple (static).
+        rays.fillGradientStyle(0x1e1b4b, 0x1e1b4b, 0x3b1270, 0x3b1270, 1);
+        rays.fillRect(cx - popW / 2 + 8, artworkY + 4, popW - 16, artworkH - 6);
+        // Darker outer corners, brighter centre (vignette).
+        rays.fillStyle(0x0b0620, 0.42);
+        rays.fillEllipse(cx - popW / 2 + 16, artworkY + 8, 130, 90);
+        rays.fillEllipse(cx + popW / 2 - 16, artworkY + 8, 130, 90);
+        rays.fillEllipse(cx - popW / 2 + 16, artworkY + artworkH - 2, 130, 90);
+        rays.fillEllipse(cx + popW / 2 - 16, artworkY + artworkH - 2, 130, 90);
+        // Static sunburst rays behind the coins only (never over reward text).
+        const rayCx = cx;
+        const rayCy = artworkY + artworkH / 2;
+        for (let i = 0; i < 12; i += 1) {
+            const a0 = (i / 12) * Math.PI * 2;
+            const a1 = ((i + 1) / 12) * Math.PI * 2;
+            rays.fillStyle(i % 2 === 0 ? 0xffffff : 0xffe38a, 0.2);
+            rays.fillTriangle(
+                rayCx, rayCy,
+                rayCx + Math.cos(a0) * (popW / 2 + 20), rayCy + Math.sin(a0) * (popW / 2 + 20),
+                rayCx + Math.cos(a1) * (popW / 2 + 20), rayCy + Math.sin(a1) * (popW / 2 + 20),
+            );
+        }
+        // Soft golden radial glow layered behind the coin pile.
+        rays.fillStyle(0xd4af37, 0.22);
+        rays.fillCircle(rayCx, rayCy, 96);
+        rays.fillStyle(0xffe38a, 0.22);
+        rays.fillCircle(rayCx, rayCy, 62);
+        rays.fillStyle(0xffffff, 0.3);
+        rays.fillCircle(rayCx, rayCy, 34);
+        // Gilt inner frame + corner ornaments for the artwork.
+        rays.lineStyle(2, 0xd4af37, 0.85);
+        rays.strokeRect(cx - popW / 2 + 12, artworkY + 8, popW - 24, artworkH - 14);
+        rays.fillStyle(0xd4af37, 0.95);
+        [[cx - popW / 2 + 12, artworkY + 8], [cx + popW / 2 - 12, artworkY + 8], [cx - popW / 2 + 12, artworkY + artworkH - 6], [cx + popW / 2 - 12, artworkY + artworkH - 6]].forEach(([ox, oy]) => {
+            rays.fillTriangle(ox, oy - 8, ox + 8, oy, ox, oy + 8);
+            rays.fillTriangle(ox, oy - 8, ox - 8, oy, ox, oy + 8);
+        });
+
+        const coins = this.add.graphics();
+        const drawCoin = (x: number, y: number, r: number): void => {
+            // Premium metallic gold: dark rim, golden gradient body,
+            // lighter inner face, rim light and a bright highlight.
+            coins.fillStyle(0x92400e, 1);
+            coins.fillEllipse(x, y + 3, r * 2.6, r * 2);
+            coins.fillGradientStyle(0xffe38a, 0xffe38a, 0xb45309, 0xb45309, 1);
+            coins.fillEllipse(x, y, r * 2.6, r * 2);
+            coins.lineStyle(2, 0xfff6c9, 0.95);
+            coins.strokeEllipse(x, y, r * 2.5, r * 1.9);
+            coins.fillStyle(0xffe38a, 1);
+            coins.fillEllipse(x, y, r * 2.0, r * 1.45);
+            coins.lineStyle(1.5, 0xd97706, 0.9);
+            coins.strokeEllipse(x, y, r * 1.9, r * 1.35);
+            coins.fillStyle(0xffc928, 1);
+            coins.fillCircle(x - r * 0.15, y, r * 0.42);
+            coins.fillStyle(0xffffff, 0.85);
+            coins.fillEllipse(x - r * 0.5, y - r * 0.35, r * 0.75, r * 0.4);
+        };
+        // Pile, bottom row first (vertical offsets compress on short cards
+        // so the big coins never poke into the header).
+        const coinS = Math.min(1, Math.max(0.45, (artworkH - 52) / 92));
+        const py = artworkY + artworkH - 38;
+        drawCoin(cx - 66, py, 20);
+        drawCoin(cx - 30, py + 5, 21);
+        drawCoin(cx + 8, py + 6, 21);
+        drawCoin(cx + 45, py + 5, 20);
+        drawCoin(cx + 75, py - 2, 19);
+        drawCoin(cx - 47, py - 28 * coinS, 20);
+        drawCoin(cx - 8, py - 27 * coinS, 21);
+        drawCoin(cx + 30, py - 28 * coinS, 20);
+        drawCoin(cx - 23, py - 56 * coinS, 20);
+        drawCoin(cx + 11, py - 57 * coinS, 20);
+        drawCoin(cx - 5, py - 84 * coinS, 19);
+        drawCoin(cx + 26, py - 64 * coinS, 18);
+        // Floating coins around the pile (slightly outside the card edge).
+        drawCoin(cx - popW / 2 - 6, artworkY + 20, 21);
+        drawCoin(cx + popW / 2 + 4, artworkY + 16, 20);
+        drawCoin(cx - popW / 2 + 20, artworkY + artworkH - 30, 18);
+        drawCoin(cx + popW / 2 - 20, artworkY + artworkH - 26, 19);
+        // Sparkles + tiny floating light particles (static deco).
+        coins.fillStyle(0xfff6c9, 0.95);
+        coins.fillTriangle(cx - 96, artworkY + 58, cx - 90, artworkY + 58, cx - 93, artworkY + 50);
+        coins.fillTriangle(cx + 94, artworkY + 70, cx + 100, artworkY + 70, cx + 97, artworkY + 62);
+        coins.fillStyle(0xffe38a, 0.9);
+        coins.fillTriangle(cx - 40, artworkY + 22, cx - 35, artworkY + 22, cx - 37, artworkY + 15);
+        coins.fillTriangle(cx + 52, artworkY + 30, cx + 57, artworkY + 30, cx + 54, artworkY + 23);
+        coins.fillStyle(0xffe38a, 0.6);
+        coins.fillCircle(cx - 70, artworkY + 34, 2);
+        coins.fillCircle(cx + 38, artworkY + 52, 2);
+        coins.fillCircle(cx - 18, artworkY + 18, 2);
+        coins.fillCircle(cx + 76, artworkY + 96, 2);
+        coins.fillCircle(cx - 82, artworkY + 104, 2);
+        coins.fillStyle(0xfff6c9, 0.5);
+        coins.fillCircle(cx + 18, artworkY + 84, 1.5);
+        coins.fillCircle(cx - 54, artworkY + 76, 1.5);
+
+        const title = this.add.text(cx, top + 27, STARTER_PACK_TITLE, {
+            fontFamily: FONT_DISPLAY, fontSize: '23px', color: '#ffe38a', stroke: '#1e1b4b', strokeThickness: 4,
+        }).setOrigin(0.5);
+        const bodyTop = artworkY + artworkH;
+        const limited = this.add.text(cx, bodyTop + 18, 'LIMITED OFFER!', {
+            fontFamily: FONT_DISPLAY, fontSize: '14px', color: '#33415c',
+        }).setOrigin(0.5);
+        const offer = this.add.text(cx, bodyTop + 42, `GET ${STARTER_PACK_COINS} COINS`, {
+            fontFamily: FONT_DISPLAY, fontSize: '26px', color: '#33415c',
+        }).setOrigin(0.5);
+        const price = this.add.text(cx, bodyTop + 64, `ONLY FOR ${STARTER_PACK_PRICE_BDT}`, {
+            fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#5b6b8c',
+        }).setOrigin(0.5);
+
+        // 70% OFF badge on the left edge at the artwork/body seam.
+        const badge = this.add.graphics();
+        badge.fillStyle(0x020617, 0.35);
+        badge.fillCircle(cx - popW / 2 + 2, bodyTop + 4, 32);
+        badge.fillStyle(0xa855f7, 1);
+        badge.fillCircle(cx - popW / 2, bodyTop, 32);
+        badge.lineStyle(2, 0xffffff, 0.95);
+        badge.strokeCircle(cx - popW / 2, bodyTop, 32);
+        const badgePct = this.add.text(cx - popW / 2, bodyTop - 9, '70%', {
+            fontFamily: FONT_DISPLAY, fontSize: '16px', color: '#ffffff',
+        }).setOrigin(0.5).setAngle(-25);
+        const badgeOff = this.add.text(cx - popW / 2, bodyTop + 9, 'OFF', {
+            fontFamily: FONT_DISPLAY, fontSize: '14px', color: '#ffffff',
+        }).setOrigin(0.5).setAngle(-25);
+
+        const buyW = 200;
+        const buyH = 48;
+        const buyY = bodyTop + 104;
+        const buyBg = this.add.graphics();
+        const drawBuy = (): void => {
+            buyBg.clear();
+            buyBg.fillStyle(0x020617, 0.35);
+            buyBg.fillRoundedRect(cx - buyW / 2, buyY - buyH / 2 + 3, buyW, buyH, 12);
+            if (this.starterBuyDisabled) {
+                buyBg.fillStyle(0x94a3b8, 1);
+            } else {
+                buyBg.fillGradientStyle(0x4ade80, 0x4ade80, 0x16a34a, 0x16a34a, 1);
+            }
+            buyBg.fillRoundedRect(cx - buyW / 2, buyY - buyH / 2, buyW, buyH, 12);
+            buyBg.fillStyle(0xffffff, 0.22);
+            buyBg.fillRoundedRect(cx - buyW / 2 + 10, buyY - buyH / 2 + 5, buyW - 20, 12, 6);
+            buyBg.lineStyle(2, 0xffffff, 0.95);
+            buyBg.strokeRoundedRect(cx - buyW / 2, buyY - buyH / 2, buyW, buyH, 12);
+        };
+        drawBuy();
+        this.starterBuyBg = buyBg;
+        const buyText = this.add.text(cx, buyY, this.starterBuyDisabled ? 'EXPIRED' : 'BUY NOW!', {
+            fontFamily: FONT_DISPLAY, fontSize: '19px', color: '#ffffff', stroke: '#14532d', strokeThickness: 2,
+        }).setOrigin(0.5);
+        this.starterBuyText = buyText;
+        const buyHit = this.add.rectangle(cx, buyY, buyW, buyH, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+        buyHit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _lx: number, _ly: number, event: Phaser.Types.Input.EventData) => {
+            event.stopPropagation();
+            void this.buyStarterPack();
+        });
+
+        const status = this.add.text(cx, buyY + 36, this.starterBuyDisabled ? 'This offer has expired.' : '', {
+            fontFamily: FONT, fontSize: '11px', color: '#b45309', align: 'center', wordWrap: { width: popW - 40 },
+        }).setOrigin(0.5);
+        status.setName('starter-status');
+        this.starterStatusText = status;
+
+        // TIME LEFT pill below the card (reference: outside the card body).
+        const pillW = 220;
+        const pillY = top + popH + 26;
+        const pill = this.add.graphics();
+        pill.fillStyle(0x020617, 0.35);
+        pill.fillRoundedRect(cx - pillW / 2, pillY - 17 + 3, pillW, 36, 18);
+        pill.fillGradientStyle(0xbfe3fb, 0xbfe3fb, 0x7cc3f5, 0x7cc3f5, 1);
+        pill.fillRoundedRect(cx - pillW / 2, pillY - 17, pillW, 36, 18);
+        pill.lineStyle(2, 0xffffff, 0.9);
+        pill.strokeRoundedRect(cx - pillW / 2, pillY - 17, pillW, 36, 18);
+        pill.fillStyle(0x168bff, 1);
+        pill.fillCircle(cx - 78, pillY, 13);
+        pill.lineStyle(2, 0xffffff, 0.95);
+        pill.strokeCircle(cx - 78, pillY, 13);
+        pill.lineStyle(2, 0xffffff, 1);
+        pill.beginPath();
+        pill.moveTo(cx - 78, pillY);
+        pill.lineTo(cx - 78, pillY - 7);
+        pill.moveTo(cx - 78, pillY);
+        pill.lineTo(cx - 73, pillY + 2);
+        pill.strokePath();
+        const timeLabel = this.add.text(cx - 58, pillY, 'TIME LEFT', {
+            fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#1e3a5f',
+        }).setOrigin(0, 0.5);
+        const timeText = this.add.text(cx + 26, pillY, formatOfferCountdown(starterPackRemainingMs()), {
+            fontFamily: FONT_DISPLAY, fontSize: '16px', color: '#1e3a5f',
+        }).setOrigin(0, 0.5);
+        timeText.setName('starter-countdown');
+        this.starterTimeText = timeText;
+
+        // Close (X) button at the top-right corner.
+        const closeX = cx + popW / 2 - 4;
+        const closeY = top + 2;
+        const closeBg = this.add.graphics();
+        closeBg.fillStyle(0x020617, 0.25);
+        closeBg.fillCircle(closeX + 1, closeY + 2, 17);
+        closeBg.fillStyle(0xffffff, 1);
+        closeBg.fillCircle(closeX, closeY, 17);
+        closeBg.lineStyle(2, 0x168bff, 0.9);
+        closeBg.strokeCircle(closeX, closeY, 17);
+        const closeIcon = this.add.graphics();
+        closeIcon.lineStyle(3, 0x168bff, 1);
+        closeIcon.beginPath();
+        closeIcon.moveTo(closeX - 6, closeY - 6);
+        closeIcon.lineTo(closeX + 6, closeY + 6);
+        closeIcon.moveTo(closeX + 6, closeY - 6);
+        closeIcon.lineTo(closeX - 6, closeY + 6);
+        closeIcon.strokePath();
+        const closeHit = this.add.circle(closeX, closeY, 18, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+        closeHit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _lx: number, _ly: number, event: Phaser.Types.Input.EventData) => {
+            event.stopPropagation();
+            this.hideStarterPackPopup();
+        });
+
+        // Swallow clicks inside the card + ribbon + pill so they never reach the map.
+        const blocker = this.add.rectangle(cx, cy + 15, popW + 24, popH + 72, 0xffffff, 0.001).setInteractive();
+        blocker.on('pointerdown', (_pointer: Phaser.Input.Pointer, _lx: number, _ly: number, event: Phaser.Types.Input.EventData) => {
+            event.stopPropagation();
+        });
+        dim.on('pointerdown', () => {
+            this.hideStarterPackPopup();
+        });
+
+        popup.add([dim, blocker, card, rays, coins, title, limited, offer, price, badge, badgePct, badgeOff, buyBg, buyText, status, pill, timeLabel, timeText, closeBg, closeIcon, buyHit, closeHit]);
+        this.starterPopup = popup;
+        this.starterBuyDisabled = isStarterPackExpired();
+        if (this.starterBuyDisabled) {
+            drawBuy();
+            buyText.setText('EXPIRED');
+            status.setText('This offer has expired.');
+        }
+        // The 1s offer clock started in create() is always running; it
+        // updates these texts live whether the popup is open or not.
+    }
+
+    private hideStarterPackPopup(): void {
+        // Keep the offer clock running after close; only UI refs clear.
+        this.starterTimeText = null;
+        this.starterBuyText = null;
+        this.starterBuyBg = null;
+        this.starterStatusText = null;
+        this.starterBuyDisabled = false;
+        this.starterPurchasing = false;
+        releaseModalInputLock('starter-pack');
+        this.starterPopup?.destroy(true);
+        this.starterPopup = null;
+    }
+
+    private tickStarterPack(): void {
+        const remaining = starterPackRemainingMs();
+        this.starterTimeText?.setText(formatOfferCountdown(remaining));
+        if (remaining <= 0) {
+            this.starterBuyDisabled = true;
+            this.starterBuyText?.setText('EXPIRED');
+            this.starterStatusText?.setText('This offer has expired.');
+            this.starterBuyBg?.clear();
+            const width = worldWidth();
+            const height = worldHeight();
+            const cy = height / 2 - 24;
+            const popH = Math.min(470, height - 90);
+            const buyW = 200;
+            const buyH = 48;
+            const artworkH = Math.max(110, popH - 64 - 192);
+            const buyY = cy - popH / 2 + 64 + artworkH + 104;
+            const g = this.starterBuyBg;
+            if (g) {
+                g.fillStyle(0x020617, 0.35);
+                g.fillRoundedRect(width / 2 - buyW / 2, buyY - buyH / 2 + 3, buyW, buyH, 12);
+                g.fillStyle(0x94a3b8, 1);
+                g.fillRoundedRect(width / 2 - buyW / 2, buyY - buyH / 2, buyW, buyH, 12);
+                g.fillStyle(0xffffff, 0.22);
+                g.fillRoundedRect(width / 2 - buyW / 2 + 10, buyY - buyH / 2 + 5, buyW - 20, 12, 6);
+                g.lineStyle(2, 0xffffff, 0.95);
+                g.strokeRoundedRect(width / 2 - buyW / 2, buyY - buyH / 2, buyW, buyH, 12);
+            }
+        }
+    }
+
+    private setStarterStatus(message: string): void {
+        this.starterStatusText?.setText(message);
+    }
+
+    private async buyStarterPack(): Promise<void> {
+        if (!this.starterPopup || this.starterBuyDisabled || this.starterPurchasing) {
+            return;
+        }
+        if (isStarterPackExpired()) {
+            this.tickStarterPack();
+            return;
+        }
+        const product: RealMoneyProduct = {
+            id: 'starter-pack-offer',
+            sku: 'starter_pack_30_coins',
+            name: STARTER_PACK_TITLE,
+            coins: STARTER_PACK_COINS,
+            grants: {},
+            usdPrice: STARTER_PACK_PRICE_BDT,
+        };
+        this.starterPurchasing = true;
+        this.setStarterStatus('Processing…');
+        const outcome = await requestPurchase(product);
+        if (!this.starterPopup) {
+            this.starterPurchasing = false;
+            return;
+        }
+        if (outcome.status === 'unavailable') {
+            this.setStarterStatus(outcome.reason ?? 'Store payments are not configured yet. No charge was made.');
+            this.starterPurchasing = false;
+            return;
+        }
+        if (outcome.status === 'cancelled') {
+            this.setStarterStatus('Purchase cancelled. No charge was made.');
+            this.starterPurchasing = false;
+            return;
+        }
+        if (outcome.status !== 'granted') {
+            this.setStarterStatus(outcome.reason ?? 'The purchase could not be completed. No charge was made.');
+            this.starterPurchasing = false;
+            return;
+        }
+        if (hasProcessedTransaction(outcome.transactionId)) {
+            this.setStarterStatus('This transaction was already processed.');
+            this.starterPurchasing = false;
+            return;
+        }
+        const verification = await verifyTransaction(product, outcome.transactionId, outcome.platform, outcome.receipt);
+        if (!verification.verified) {
+            this.setStarterStatus(verification.reason ?? 'The purchase could not be verified. No rewards were granted.');
+            this.starterPurchasing = false;
+            return;
+        }
+        markTransactionProcessed(outcome.transactionId, product.id);
+        addCoins(product.coins);
+        this.progress = loadProgress();
+        this.refreshHud();
+        this.setStarterStatus(`Purchase successful! +${product.coins} Coins. Balance: ${this.progress.coins.toLocaleString('en-US')} Coins.`);
+        this.starterPurchasing = false;
     }
 
     private toggleInfo(): void {
