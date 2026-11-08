@@ -51,6 +51,18 @@ export class AssetLoader {
         this.scene.load.svg('powerup-lightning', 'assets/icons/powerup-lightning.svg', { width: 56, height: 56 });
         this.scene.load.svg('powerup-fireball', 'assets/icons/powerup-fireball.svg', { width: 56, height: 56 });
         this.scene.load.svg('icon-fire', 'assets/icons/icon-fire.svg', { width: 56, height: 56 });
+        // Separate transparent gift artwork (one PNG per gift, no combined sheet).
+        this.scene.load.image('gift-blue', 'assets/gifts/gift-blue.png');
+        this.scene.load.image('gift-green', 'assets/gifts/gift-green.png');
+        this.scene.load.image('gift-purple', 'assets/gifts/gift-purple.png');
+        this.scene.load.image('gift-golden', 'assets/gifts/gift-golden.png');
+        this.scene.load.image('gift-pink', 'assets/gifts/gift-pink.png');
+        this.scene.load.image('gift-silver', 'assets/gifts/gift-silver.png');
+        this.scene.load.image('gift-shell', 'assets/gifts/gift-shell.png');
+        this.scene.load.image('gift-heart', 'assets/gifts/gift-heart.png');
+        this.scene.load.image('gift-knot', 'assets/gifts/gift-knot.png');
+        this.scene.load.image('gift-pod', 'assets/gifts/gift-pod.png');
+        this.scene.load.image('gift-ice', 'assets/gifts/gift-ice.png');
         
         // UI
         this.scene.load.svg('ui-button-primary', 'assets/ui/button-primary.svg', { width: 320, height: 86 });

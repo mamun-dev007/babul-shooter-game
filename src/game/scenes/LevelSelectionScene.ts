@@ -16,7 +16,7 @@ import {
 } from '../data/levels/progress';
 import { loadProgress, type Progress } from '../utils/storage';
 import { installUiAudio } from '../audio/GameAudio';
-import { fadeInScene, goToScene } from './transitions';
+import { fadeInScene, goToScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { Button } from '../../ui/design';
 import { drawVectorIcon, type VectorIcon } from '../../ui/vectorIcons';
@@ -530,9 +530,9 @@ if (entry.state === 'completed') {
         const graphics = this.add.graphics();
         this.drawBlueGlossyCircle(graphics, 22);
         this.drawSideIcon(graphics, kind);
-        // Lock badge on every side button except Daily — Daily stays
-        // unlocked/enabled with its original star icon restored.
-        if (title !== 'DAILY') {
+        // Lock badge on every side button except Daily and Gift — both stay
+        // unlocked/enabled with their original icons restored.
+        if (title !== 'DAILY' && title !== 'GIFT') {
             graphics.fillStyle(0x64748b, 1);
             graphics.fillCircle(15, 15, 7);
             graphics.fillStyle(0xe5e7eb, 1);
@@ -565,6 +565,14 @@ if (entry.state === 'completed') {
                 if (this.locked || this.infoPanel) return;
                 this.locked = true;
                 goToScene(this, 'DailyTasksScene', { returnTo: 'LevelSelectionScene' }, 180);
+            });
+        } else if (title === 'GIFT') {
+            // Instant navigation: no fade/slide/zoom transition or delay.
+            // Gift button itself is never animated (no press FX).
+            hit.on('pointerdown', () => {
+                if (this.locked || this.infoPanel) return;
+                this.locked = true;
+                goToSceneInstant(this, 'GiftItemsScene', { returnTo: 'LevelSelectionScene', instant: true });
             });
         } else {
             hit.on('pointerdown', () => {

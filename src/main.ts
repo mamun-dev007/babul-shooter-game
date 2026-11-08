@@ -8,6 +8,7 @@ import { LevelSelectionScene } from './game/scenes/LevelSelectionScene';
 import { SettingsScene } from './game/scenes/SettingsScene';
 import { CoinStoreScene } from './game/scenes/CoinStoreScene';
 import { DailyTasksScene } from './game/scenes/DailyTasksScene';
+import { GiftItemsScene } from './game/scenes/GiftItemsScene';
 import { GameScene } from './game/scenes/GameScene';
 import { gameAudio } from './game/audio/GameAudio';
 // Registers the active rewarded-ad provider (Yandex Games SDK) at boot.
@@ -49,7 +50,7 @@ const config: Phaser.Types.Core.GameConfig = {
     audio: {
         noAudio: true,
     },
-    scene: [BootScene, LoadingScene, MenuScene, LevelSelectionScene, SettingsScene, CoinStoreScene, DailyTasksScene, GameScene],
+    scene: [BootScene, LoadingScene, MenuScene, LevelSelectionScene, SettingsScene, CoinStoreScene, DailyTasksScene, GiftItemsScene, GameScene],
 };
 
 const unlockAudio = (): void => {
