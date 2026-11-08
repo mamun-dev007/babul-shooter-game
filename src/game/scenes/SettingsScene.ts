@@ -2,7 +2,7 @@ import { Scene } from 'phaser';
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { loadProgress, saveProgress, toggleMusic, toggleSound, resetProgress } from '../utils/storage';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
-import { fadeInScene, goToScene } from './transitions';
+import { fadeInScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { applyLegacyScreenFit } from '../responsive';
 
@@ -109,6 +109,9 @@ export class SettingsScene extends Scene {
         });
 
         this.createBottomButtons();
+        this.add.text(GAME_WIDTH / 2, 640, 'DEVELOPED BY MAMUN', {
+            fontFamily: FONT, fontSize: '15px', fontStyle: 'bold', color: '#e8fbff', letterSpacing: 2,
+        }).setOrigin(0.5).setDepth(6);
     }
 
     private drawRowIcon(g: Phaser.GameObjects.Graphics, kind: string): void {
@@ -214,7 +217,7 @@ export class SettingsScene extends Scene {
 
     private goBack(): void {
         if (this.locked) return; this.locked = true;
-        if (this.returnTo === 'GameScene') goToScene(this, this.returnTo, { level: this.returnLevel }, 180);
-        else goToScene(this, this.returnTo, undefined, 180);
+        if (this.returnTo === 'GameScene') goToSceneInstant(this, this.returnTo, { level: this.returnLevel });
+        else goToSceneInstant(this, this.returnTo, undefined);
     }
 }

@@ -46,7 +46,7 @@ const DEFAULT_PROGRESS: Progress = {
     masterVolume: 1,
     musicVolume: 0.8,
     sfxVolume: 0.9,
-    coins: 1000,
+               coins: 0,
     completedLevels: [],
     stars: {},
     vibration: true,
@@ -372,7 +372,7 @@ export const resetProgress = (onlyGameProgress = true): void => {
               ...current,
               highestLevel: 0,
               bestScore: 0,
-              coins: 1000,
+    coins: 0,
               completedLevels: [],
               stars: {},
           }

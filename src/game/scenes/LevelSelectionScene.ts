@@ -716,7 +716,7 @@ if (entry.state === 'completed') {
     private goToSettings(): void {
         if (this.locked) return;
         this.locked = true;
-        goToScene(this, 'SettingsScene', { returnTo: 'LevelSelectionScene' }, 180);
+        goToSceneInstant(this, 'SettingsScene', { returnTo: 'LevelSelectionScene' });
     }
 
     private goToCoinStore(): void {

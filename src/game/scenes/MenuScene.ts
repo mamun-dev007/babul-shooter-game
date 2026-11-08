@@ -108,7 +108,7 @@ export class MenuScene extends Scene {
 
     private createSettingsButton(): void {
         this.createPillButton(GAME_WIDTH / 2, menuSettingsY(), 258, 64, 'Setting', 'gear', () => {
-            goToScene(this, 'SettingsScene', undefined, 200);
+            goToSceneInstant(this, 'SettingsScene', undefined);
         });
     }
 
