@@ -1,16 +1,29 @@
 import { GameObjects, Math as PhaserMath } from 'phaser';
 import {
-    BUBBLE_DIAMETER,
     COLOR_NAMES,
     FONT,
     MAX_AIM_ANGLE,
     bubbleTexture,
     type BubbleColorName,
 } from '../config';
-import { SHOOTER_TOP_CLEARANCE } from '../layout';
+import {
+    LAUNCHER_BARREL_TIP,
+    LAUNCHER_LOADED_BUBBLE_SIZE,
+    LAUNCHER_NEXT_PREVIEW_SIZE,
+    LAUNCHER_SCALE,
+    LAUNCHER_SIDE_CONTROL_RADIUS,
+    launcherSideControlOffsetX,
+    launcherSideControlY,
+} from '../layout';
+import {
+    drawLauncherBarrel,
+    drawLauncherDisc,
+    drawSideControlDisc,
+} from '../../ui/gameplayChrome';
 
-const PREVIEW_SIZE = 27;
-const BARREL_TIP = 76;
+const PREVIEW_SIZE = LAUNCHER_NEXT_PREVIEW_SIZE;
+const BARREL_TIP = LAUNCHER_BARREL_TIP;
+const NEXT_SPINNER_RADIUS = 21;
 
 interface Velocity {
     x: number;
@@ -39,52 +52,53 @@ export class Shooter extends GameObjects.Container {
         this.currentColor = COLOR_NAMES[0];
         this.nextColor = COLOR_NAMES[1];
 
-        const baseShadow = scene.add.circle(0, 5, 28, 0x123a35, 0.28);
-        const base = scene.add.circle(0, 0, 24, 0x248b57).setStrokeStyle(3, 0xb9ffd1);
-        const baseGlow = scene.add.circle(0, 0, 18, 0x42c66f, 0.92);
-        const baseCore = scene.add.circle(0, 0, 12, 0x1c744b);
+        const baseDisc = scene.add.graphics();
+        drawLauncherDisc(baseDisc);
 
         const barrel = scene.add.container(0, 0);
         const barrelGfx = scene.add.graphics();
-        barrelGfx.fillStyle(0x247e54, 0.72);
-        barrelGfx.fillRoundedRect(-9, -SHOOTER_TOP_CLEARANCE, 18, 80, 9);
-        barrelGfx.lineStyle(2, 0xcaffd9, 0.92);
-        barrelGfx.strokeRoundedRect(-9, -SHOOTER_TOP_CLEARANCE, 18, 80, 9);
-        barrelGfx.fillStyle(0x91f0a8, 0.48);
-        barrelGfx.fillRoundedRect(-4, -72, 8, 66, 4);
+        drawLauncherBarrel(barrelGfx);
         barrel.add(barrelGfx);
 
         const loadedBubble = scene.add
             .image(0, -BARREL_TIP, bubbleTexture(this.currentColor))
-            .setDisplaySize(BUBBLE_DIAMETER, BUBBLE_DIAMETER);
+            .setDisplaySize(LAUNCHER_LOADED_BUBBLE_SIZE, LAUNCHER_LOADED_BUBBLE_SIZE);
         barrel.add(loadedBubble);
 
         const loadedHit = scene.add
-            .circle(0, -BARREL_TIP, 24, 0xffffff, 0.001)
+            .circle(0, -BARREL_TIP, 24 * LAUNCHER_SCALE, 0xffffff, 0.001)
             .setInteractive({ useHandCursor: true });
         loadedHit.on('pointerdown', () => this.swapWithNext());
         this.add(loadedHit);
 
-        const nextBackdrop = scene.add.circle(68, 0, 18, 0x2868d6, 0.94).setStrokeStyle(2, 0xffffff);
+        const nextX = launcherSideControlOffsetX();
+        const nextY = launcherSideControlY() - y;
+        const nextButton = scene.add.graphics().setPosition(nextX, nextY);
+        drawSideControlDisc(nextButton);
+
         const nextHit = scene.add
-            .circle(68, 0, 24, 0xffffff, 0.001)
+            .circle(nextX, nextY, LAUNCHER_SIDE_CONTROL_RADIUS, 0xffffff, 0.001)
             .setInteractive({ useHandCursor: true });
         nextHit.on('pointerdown', () => this.swapWithNext());
 
+        const nextBubbleY = nextY + 7;
         const nextBubble = scene.add
-            .image(68, 0, bubbleTexture(this.nextColor))
+            .image(nextX, nextBubbleY, bubbleTexture(this.nextColor))
             .setDisplaySize(PREVIEW_SIZE, PREVIEW_SIZE);
 
-        const spinner = scene.add.container(68, 0);
+        const spinner = scene.add.container(nextX, nextBubbleY);
         const createSpinnerArrow = (angle: number) => {
             const arrow = scene.add.graphics();
             arrow.fillStyle(0xff5a32, 1);
-            arrow.lineStyle(3, 0xff8a4c, 1);
+            arrow.lineStyle(2.5, 0xff8a4c, 1);
             arrow.beginPath();
-            arrow.arc(0, 0, 11, -Math.PI * 0.72, Math.PI * 0.72, false);
+            arrow.arc(0, 0, 8, -Math.PI * 0.72, Math.PI * 0.72, false);
             arrow.strokePath();
-            arrow.fillTriangle(7, -11, 17, -3, 5, -1);
-            arrow.setPosition(Math.cos(angle) * 23, Math.sin(angle) * 23);
+            arrow.fillTriangle(5, -8, 12, -2, 4, -1);
+            arrow.setPosition(
+                Math.cos(angle) * NEXT_SPINNER_RADIUS,
+                Math.sin(angle) * NEXT_SPINNER_RADIUS
+            );
             arrow.setRotation(angle + Math.PI / 2);
             return arrow;
         };
@@ -98,11 +112,11 @@ export class Shooter extends GameObjects.Container {
         });
 
         const nextLabel = scene.add
-            .text(68, 22, 'NEXT', {
+            .text(nextX, nextY - 20, 'NEXT', {
                 fontFamily: FONT,
                 fontSize: '8px',
-                color: '#ffffff',
-                stroke: '#27608a',
+                color: '#dceaff',
+                stroke: '#0a2b6b',
                 strokeThickness: 2,
             })
             .setOrigin(0.5);
@@ -111,7 +125,15 @@ export class Shooter extends GameObjects.Container {
         this.loadedBubble = loadedBubble;
         this.nextBubble = nextBubble;
 
-        this.add([baseShadow, base, baseGlow, baseCore, barrel, nextBackdrop, spinner, nextBubble, nextHit, nextLabel]);
+        this.add([
+            baseDisc,
+            barrel,
+            nextButton,
+            spinner,
+            nextBubble,
+            nextHit,
+            nextLabel,
+        ]);
 
         this.setDepth(30);
         scene.add.existing(this);
@@ -209,7 +231,13 @@ export class Shooter extends GameObjects.Container {
         // Soft glowing light around the fire: a slow breathing pulse in
         // orange — screen-cheap (one circle, one tween). Added first so it
         // renders behind every flame layer.
-        const glow = this.scene.add.circle(0, 3, 27, 0xff7a1f, 0.3);
+        const glow = this.scene.add.circle(
+            0,
+            3 * LAUNCHER_SCALE,
+            LAUNCHER_LOADED_BUBBLE_SIZE * 0.7,
+            0xff7a1f,
+            0.3
+        );
         this.scene.tweens.add({
             targets: glow,
             scale: 1.16,
@@ -225,9 +253,9 @@ export class Shooter extends GameObjects.Container {
         // flicker independently: scaleY stretches and a small sway makes the
         // fire read as alive without ever touching the launcher geometry.
         const layers = [
-            { y: 4, width: 27, height: 32, color: 0xe8420e, alpha: 0.94, flicker: 470, stretch: 0.3, sway: 1.6 },
-            { y: 1, width: 20, height: 25, color: 0xff8d1f, alpha: 0.97, flicker: 380, stretch: 0.24, sway: -2.1 },
-            { y: -2, width: 13, height: 17, color: 0xffd24a, alpha: 1, flicker: 300, stretch: 0.34, sway: 1.2 },
+            { y: 4 * LAUNCHER_SCALE, width: LAUNCHER_LOADED_BUBBLE_SIZE * 0.7, height: LAUNCHER_LOADED_BUBBLE_SIZE * 0.84, color: 0xe8420e, alpha: 0.94, flicker: 470, stretch: 0.3, sway: 1.6 },
+            { y: 1 * LAUNCHER_SCALE, width: LAUNCHER_LOADED_BUBBLE_SIZE * 0.52, height: LAUNCHER_LOADED_BUBBLE_SIZE * 0.66, color: 0xff8d1f, alpha: 0.97, flicker: 380, stretch: 0.24, sway: -2.1 },
+            { y: -2 * LAUNCHER_SCALE, width: LAUNCHER_LOADED_BUBBLE_SIZE * 0.34, height: LAUNCHER_LOADED_BUBBLE_SIZE * 0.45, color: 0xffd24a, alpha: 1, flicker: 300, stretch: 0.34, sway: 1.2 },
         ];
 
         for (const layer of layers) {
@@ -246,7 +274,7 @@ export class Shooter extends GameObjects.Container {
         }
 
         // White-hot centre that pulses like the heart of a real fire.
-        const core = this.scene.add.circle(0, -4, 3.2, 0xfff2c0, 1);
+        const core = this.scene.add.circle(0, -4 * LAUNCHER_SCALE, 3.2 * LAUNCHER_SCALE, 0xfff2c0, 1);
         this.scene.tweens.add({
             targets: core,
             alpha: { from: 0.65, to: 1 },
@@ -276,9 +304,9 @@ export class Shooter extends GameObjects.Container {
         }
 
         const spark = this.scene.add.circle(
-            PhaserMath.Between(-9, 9),
-            PhaserMath.Between(-4, 4),
-            PhaserMath.FloatBetween(1.4, 2.8),
+            PhaserMath.Between(-13, 13),
+            PhaserMath.Between(-5, 5),
+            PhaserMath.FloatBetween(2.1, 4.1),
             PhaserMath.RND.pick([0xffd24a, 0xff8d1f, 0xe8420e]),
             PhaserMath.FloatBetween(0.7, 0.95)
         );
@@ -286,7 +314,7 @@ export class Shooter extends GameObjects.Container {
 
         this.scene.tweens.add({
             targets: spark,
-            y: spark.y - PhaserMath.Between(18, 32),
+            y: spark.y - PhaserMath.Between(26, 47),
             scale: 0.15,
             alpha: 0,
             duration: PhaserMath.Between(420, 720),
@@ -308,11 +336,17 @@ export class Shooter extends GameObjects.Container {
     setLoadedPower(power: 'bomb' | 'fireball' | null, texture: string | null = null): void {
         if (power && texture) {
             this.loadedBubble.setTexture(texture);
-            this.loadedBubble.setDisplaySize(BUBBLE_DIAMETER * 1.05, BUBBLE_DIAMETER * 1.05);
+            this.loadedBubble.setDisplaySize(
+                LAUNCHER_LOADED_BUBBLE_SIZE * 1.05,
+                LAUNCHER_LOADED_BUBBLE_SIZE * 1.05
+            );
             this.loadedBubble.clearTint();
             this.loadedBubble.setAlpha(1);
         } else {
-            this.loadedBubble.setDisplaySize(BUBBLE_DIAMETER, BUBBLE_DIAMETER);
+            this.loadedBubble.setDisplaySize(
+                LAUNCHER_LOADED_BUBBLE_SIZE,
+                LAUNCHER_LOADED_BUBBLE_SIZE
+            );
             this.loadedBubble.clearTint();
             this.refreshTextures();
         }
@@ -322,7 +356,10 @@ export class Shooter extends GameObjects.Container {
     setLoadedBomb(active: boolean): void {
         if (active) {
             this.loadedBubble.setTexture('powerup-bomb');
-            this.loadedBubble.setDisplaySize(BUBBLE_DIAMETER * 1.12, BUBBLE_DIAMETER * 1.12);
+            this.loadedBubble.setDisplaySize(
+                LAUNCHER_LOADED_BUBBLE_SIZE * 1.12,
+                LAUNCHER_LOADED_BUBBLE_SIZE * 1.12
+            );
             this.loadedBubble.clearTint();
             this.loadedBubble.setAlpha(1);
             this.loadedBubble.setVisible(true);

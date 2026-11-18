@@ -34,14 +34,64 @@ export const MAP_WAVE_NODES = 10;
 /** Exactly ten levels at a time live inside the map viewport. */
 export const LEVELS_PER_PAGE = MAP_WAVE_NODES;
 
+/** True when the level map is using mobile-specific sizing. */
+export let MAP_LAYOUT_MOBILE = false;
+/**
+ * Live button multiplier for the phone breakpoint (1.30 / 1.42 / 1.55 /
+ * 1.58). Tablet and desktop force it back to 1 so their layout never
+ * changes. Exported so node labels/stars scale with their disc.
+ */
+export let MAP_UI_SCALE = 1;
+/** Visual radius of a level node button (baseline 26). */
+export let MAP_NODE_RADIUS = 26;
+/** Interactive hit radius for a level node (baseline 32). */
+export let MAP_NODE_HIT_RADIUS = 32;
+/** Multiplier applied to level-path stroke widths (baseline 1). */
+export let MAP_PATH_SCALE = 1;
+
 export const configureLevelMapLayout = (
     width: number,
-    viewportHeight: number
+    viewportHeight: number,
+    mobile = false,
+    uiScale = mobile ? 1.18 : 1
 ): void => {
+    MAP_LAYOUT_MOBILE = mobile;
+    MAP_UI_SCALE = mobile ? Math.max(1, uiScale) : 1;
     MAP_WIDTH = Math.max(320, Math.round(width));
     MAP_PATH_CENTER = MAP_WIDTH / 2;
-    MAP_PATH_AMPLITUDE = Math.max(72, Math.min(180, (MAP_WIDTH - 70) / 2));
-    MAP_NODE_SPACING = Math.max(60, Math.min(90, Math.floor(viewportHeight / 9)));
+    if (mobile) {
+        // Let the discs reach their full breakpoint size, then grow the
+        // vertical step with them so neighbours never overlap. The map stays
+        // fully scrollable, so showing fewer stops per screen is expected.
+        const baseSpacing = Math.max(66, Math.min(90, Math.floor(viewportHeight / 9)));
+        MAP_NODE_RADIUS = Math.max(26, Math.round(26 * MAP_UI_SCALE));
+        MAP_NODE_SPACING = Math.max(baseSpacing, MAP_NODE_RADIUS * 2 + 6);
+
+        // Comfortable hit area, but capped just under the neighbouring disc so
+        // a tap can never be attributed to the wrong level.
+        const preferredHit = Math.round(32 * MAP_UI_SCALE);
+        const maxHitRadius = MAP_NODE_SPACING - MAP_NODE_RADIUS - 1;
+        MAP_NODE_HIT_RADIUS = Math.max(
+            MAP_NODE_RADIUS + 4,
+            Math.min(preferredHit, maxHitRadius)
+        );
+        // The road thickens with the buttons; every phone band is wider than
+        // the old 1.22x mobile stroke.
+        MAP_PATH_SCALE = 1.22 * (MAP_UI_SCALE / 1.18);
+    } else {
+        MAP_NODE_SPACING = Math.max(60, Math.min(90, Math.floor(viewportHeight / 9)));
+        MAP_NODE_RADIUS = 26;
+        MAP_NODE_HIT_RADIUS = 32;
+        MAP_PATH_SCALE = 1;
+    }
+
+    // Widen the snake alongside the buttons, but clamp so every disc (plus a
+    // safety margin) stays fully inside the world: no clipping/overflow.
+    const baseAmplitude = Math.max(72, Math.min(180, (MAP_WIDTH - 70) / 2));
+    const safeAmplitude = Math.max(72, MAP_PATH_CENTER - MAP_NODE_RADIUS - 16);
+    MAP_PATH_AMPLITUDE = Math.round(
+        Math.min(baseAmplitude * (mobile ? MAP_UI_SCALE : 1), safeAmplitude)
+    );
 };
 
 export type MapNodeTint = 'blue' | 'purple' | 'green' | 'gold';

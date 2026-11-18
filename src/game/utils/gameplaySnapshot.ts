@@ -23,4 +23,7 @@ export interface GameplaySnapshot {
     nextColor: BubbleColorName;
     selectedPower: 'bomb' | 'fireball' | null;
     fireCharge: FireChargeProgress;
+    /** Daily Task attempt flags, preserved across the Coin Store round-trip. */
+    levelPowerUsed: boolean;
+    streakBubbles: number;
 }

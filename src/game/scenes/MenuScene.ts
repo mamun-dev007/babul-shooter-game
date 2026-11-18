@@ -2,23 +2,51 @@ import { Scene } from 'phaser';
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { loadProgress, toggleMusic, toggleSound } from '../utils/storage';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
-import { fadeInScene, goToScene, goToSceneInstant } from './transitions';
+import { fadeInScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
+import { BackConfirmationPanel } from '../../ui/BackConfirmationPanel';
+import { exitAndroidApp } from '../input/androidBack';
 import { drawVectorIcon, type VectorIcon } from '../../ui/vectorIcons';
 import { attachRelayout, menuCoinX, menuPlayY, menuSettingsY, menuUtilityY } from '../layout';
 
 export class MenuScene extends Scene {
     private transitioning = false;
     private relayouting = false;
+    private exitGamePanel: BackConfirmationPanel | null = null;
 
     constructor() {
         super('MenuScene');
     }
 
+    public handleAndroidBack(): void {
+        if (this.transitioning || this.exitGamePanel?.isOpen) {
+            return;
+        }
+
+        this.exitGamePanel = new BackConfirmationPanel(this, {
+            title: 'Exit Game?',
+            description: 'Are you sure you want to exit?',
+            confirmLabel: 'Exit',
+            cancelLabel: 'Continue',
+            onConfirm: () => {
+                this.exitGamePanel?.destroy();
+                this.exitGamePanel = null;
+                exitAndroidApp();
+            },
+            onCancel: () => {
+                this.exitGamePanel?.destroy();
+                this.exitGamePanel = null;
+            },
+        });
+    }
+
     create(): void {
         this.transitioning = false;
+        this.exitGamePanel?.destroy();
+        this.exitGamePanel = null;
         const progress = loadProgress();
         installUiAudio(this);
+        gameAudio.setMusicMode('menu');
         this.createBackground();
         this.createCoinButton(progress.coins);
         this.createPlayButton();
@@ -31,7 +59,13 @@ export class MenuScene extends Scene {
             this.relayouting = true;
             this.time.delayedCall(50, () => this.scene.restart());
         });
+        this.events.once('shutdown', this.handleShutdown, this);
         fadeInScene(this, 260, [0, 98, 154]);
+    }
+
+    private handleShutdown(): void {
+        this.exitGamePanel?.destroy();
+        this.exitGamePanel = null;
     }
 
     private createBackground(): void {
@@ -96,7 +130,7 @@ export class MenuScene extends Scene {
             if (this.transitioning) return;
             this.transitioning = true;
             gameAudio.playSfx('click');
-            goToScene(this, 'CoinStoreScene', { returnTo: 'MenuScene' }, 180);
+            goToSceneInstant(this, 'CoinStoreScene', { returnTo: 'MenuScene', instant: true });
         });
     }
 

@@ -169,7 +169,9 @@ describe('progress storage', () => {
 
         expect(progress.highestLevel).toBe(0);
         expect(progress.bestScore).toBe(0);
-        expect(progress.coins).toBe(1000);
+        // Coins start at 0 in the current economy (no starting grant) and a
+        // progress reset zeroes them along with levels and stars.
+        expect(progress.coins).toBe(0);
         expect(progress.completedLevels).toEqual([]);
         expect(progress.stars).toEqual({});
         expect(progress.sound).toBe(false);

@@ -20,6 +20,19 @@ export class BootScene extends Scene {
             console.warn(`[BootScene] Failed to load: ${file.key} from ${file.url}`);
         });
 
+        // The HTML boot splash already shows (and therefore downloads) the
+        // loading artwork. Reuse that exact image element as the Phaser
+        // texture so the file is never fetched twice, and the texture is
+        // ready the instant LoadingScene begins. If the image is still in
+        // flight (very slow connection), fall back to the loader, which will
+        // reuse the browser's cached copy.
+        const splashImage = document.getElementById('boot-splash-image') as HTMLImageElement | null;
+        if (splashImage && splashImage.complete && splashImage.naturalWidth > 0) {
+            this.textures.addImage('loading-background', splashImage);
+            return;
+        }
+
+        this.load.image('loading-background', 'assets/backgrounds/loading.png');
     }
 
     create(): void {

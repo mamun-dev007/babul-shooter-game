@@ -28,7 +28,7 @@ export class Bubble extends GameObjects.Image {
         this.col = col;
     }
 
-    snapTo(x: number, y: number, duration = 110): void {
+    snapTo(x: number, y: number, duration = 90): void {
         this.scene.tweens.add({
             targets: this,
             x,

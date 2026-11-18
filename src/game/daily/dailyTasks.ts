@@ -4,16 +4,33 @@ import type { PowerUpInventory } from '../powerups/inventory';
 import { recordCollectedCard } from '../collected/collected';
 
 /**
- * Daily Tasks (Daily Missions) for the Bubble Shooter game.
+ * Hard Daily Tasks for the Bubble Shooter game.
  *
- * A fixed six-mission set is shown every day so the published titles,
- * objectives and rewards never drift; the template pool below documents
- * additional rotating templates for future cycles. Progress is persisted
- * under a Dhaka (Asia/Dhaka, UTC+6) calendar-day identifier — no backend
- * is available in this build, so day rollover is client-side, guarded by
- * a high-water mark so moving the device clock backwards cannot replay a
- * previous day.
+ * Every objective below is a new gameplay requirement; none of the previous
+ * easy missions (play N levels, fire N power-ups, "champion" meta-goal) remain.
+ * Progress is stored under an Asia/Dhaka (UTC+6) calendar day with a
+ * high-water mark so a backwards device clock cannot replay an earlier day.
+ *
+ * Missions flagged `perLevel` count each level id at most once, so replaying
+ * the same level can never satisfy them twice — this is what makes
+ * "5 different levels" and the clean/efficient/star objectives meaningful.
  */
+
+/** A level finished within this many shots counts as an efficient clear. */
+export const EFFICIENT_SHOT_LIMIT = 12;
+/** A normal shot destroying at least this many bubbles is a big chain. */
+export const CHAIN_REACTION_MIN_BUBBLES = 8;
+
+export type DailyEventType =
+    | 'completeLevel'
+    | 'bubblesCleared'
+    | 'cleanLevel'
+    | 'streakBubbles'
+    | 'efficientLevel'
+    | 'fireBubbles'
+    | 'bombBubbles'
+    | 'starLevel'
+    | 'chainBubbles';
 
 export interface DailyMission {
     id: string;
@@ -22,37 +39,37 @@ export interface DailyMission {
     target: number;
     reward: number;
     icon: 'play' | 'target' | 'bomb' | 'fire' | 'champion';
+    /** Gameplay action that advances this mission. */
+    event: DailyEventType;
+    /** Count each level id once only (id supplied by the caller). */
+    perLevel?: boolean;
     /** Extra power-up rewards paid into the shared inventory on claim. */
     grants?: Partial<PowerUpInventory>;
 }
 
 export const DAILY_MISSIONS: readonly DailyMission[] = [
-    { id: 'play3', title: 'Bubble Shooter', description: 'Play 3 levels', target: 3, reward: 5, icon: 'play' },
-    { id: 'complete2', title: 'Level Master', description: 'Successfully complete 2 levels', target: 2, reward: 10, icon: 'target' },
-    { id: 'destroy100', title: 'Bubble Popper', description: 'Destroy 100 bubbles', target: 100, reward: 10, icon: 'bomb' },
-    { id: 'fire2', title: 'Fire Expert', description: 'Successfully use Fire Power 2 times', target: 2, reward: 5, icon: 'fire', grants: { fireball: 2 } },
-    { id: 'bomb2', title: 'Bomb Master', description: 'Successfully use Bomb Power 2 times', target: 2, reward: 5, icon: 'bomb', grants: { bomb: 2 } },
-    { id: 'champion', title: 'Daily Champion', description: 'Complete any 5 of the other 5 daily missions', target: 5, reward: 20, icon: 'champion' },
+    { id: 'five-different-levels', title: 'Trail Blazer', description: 'Complete 5 different levels', target: 5, reward: 30, icon: 'target', event: 'completeLevel', perLevel: true },
+    { id: 'clear-150-bubbles', title: 'Bubble Storm', description: 'Clear 150 bubbles in total', target: 150, reward: 25, icon: 'bomb', event: 'bubblesCleared' },
+    { id: 'three-no-power', title: 'Purist', description: 'Complete 3 levels without using power-ups', target: 3, reward: 35, icon: 'champion', event: 'cleanLevel', perLevel: true },
+    { id: 'forty-streak', title: 'Steady Hand', description: 'Clear 40 bubbles with consecutive successful shots', target: 40, reward: 35, icon: 'play', event: 'streakBubbles' },
+    { id: 'two-efficient', title: 'Sharp Shooter', description: `Complete 2 levels in ${EFFICIENT_SHOT_LIMIT} shots or fewer`, target: 2, reward: 40, icon: 'target', event: 'efficientLevel', perLevel: true },
+    { id: 'fire-bubbles', title: 'Flame Master', description: 'Clear 25 bubbles with Fire power', target: 25, reward: 30, icon: 'fire', event: 'fireBubbles' },
+    { id: 'bomb-bubbles', title: 'Demolition', description: 'Destroy 20 bubbles with Bomb power', target: 20, reward: 30, icon: 'bomb', event: 'bombBubbles' },
+    { id: 'three-two-stars', title: 'High Flyer', description: 'Complete 3 levels with at least 2 stars', target: 3, reward: 40, icon: 'champion', event: 'starLevel', perLevel: true },
+    { id: 'chain-reactions', title: 'Chain Reactor', description: 'Clear 20 bubbles from big chain reactions', target: 20, reward: 35, icon: 'bomb', event: 'chainBubbles' },
 ] as const;
 
 export const DAILY_REWARD_TOTAL = DAILY_MISSIONS.reduce((sum, mission) => sum + mission.reward, 0);
-
-/** Extra rotating templates kept for future daily cycles (same mechanics). */
-export const DAILY_TEMPLATE_POOL: readonly DailyMission[] = [
-    { id: 'destroy150', title: 'Bubble Storm', description: 'Destroy 150 bubbles', target: 150, reward: 15, icon: 'bomb' },
-    { id: 'fire3', title: 'Flame Master', description: 'Successfully use Fire Power 3 times', target: 3, reward: 8, icon: 'fire' },
-    { id: 'play5', title: 'Marathon', description: 'Play 5 levels', target: 5, reward: 8, icon: 'play' },
-] as const;
-
-export type DailyEventType = 'play' | 'complete' | 'destroy' | 'fire' | 'bomb';
 
 export interface DailyProgress {
     day: string;
     progress: Record<string, number>;
     claimed: string[];
+    /** Distinct level ids already counted toward `perLevel` missions. */
+    levels: Record<string, number[]>;
 }
 
-const STORAGE_KEY = 'bubble-shooter-daily.v1';
+const STORAGE_KEY = 'bubble-shooter-daily.v2';
 
 /** Asia/Dhaka is UTC+6 with no daylight-saving changes. */
 export const dhakaDayString = (now: Date = new Date()): string => {
@@ -75,7 +92,7 @@ export const formatCountdown = (remainingMs: number): string => {
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
-const emptyProgress = (day: string): DailyProgress => ({ day, progress: {}, claimed: [] });
+const emptyProgress = (day: string): DailyProgress => ({ day, progress: {}, claimed: [], levels: {} });
 
 function readStored(): DailyProgress | null {
     try {
@@ -89,10 +106,20 @@ function readStored(): DailyProgress | null {
             return null;
         }
 
+        const levels: Record<string, number[]> = {};
+        if (parsed.levels && typeof parsed.levels === 'object') {
+            for (const [id, ids] of Object.entries(parsed.levels)) {
+                if (Array.isArray(ids)) {
+                    levels[id] = ids.filter((value): value is number => Number.isFinite(value));
+                }
+            }
+        }
+
         return {
             day: parsed.day,
             progress: { ...parsed.progress },
             claimed: Array.isArray(parsed.claimed) ? [...parsed.claimed] : [],
+            levels,
         };
     } catch {
         return null;
@@ -153,10 +180,6 @@ export function loadDailyProgress(now: Date = new Date()): DailyProgress {
 }
 
 export function missionProgress(state: DailyProgress, mission: DailyMission): number {
-    if (mission.id === 'champion') {
-        return DAILY_MISSIONS.filter((m) => m.id !== 'champion').filter((m) => (state.progress[m.id] ?? 0) >= m.target).length;
-    }
-
     return Math.min(mission.target, Math.max(0, Math.floor(state.progress[mission.id] ?? 0)));
 }
 
@@ -165,36 +188,45 @@ export function isMissionComplete(state: DailyProgress, mission: DailyMission): 
 }
 
 export function completedCount(state: DailyProgress): number {
-    return DAILY_MISSIONS.filter((m) => isMissionComplete(state, m)).length;
+    return DAILY_MISSIONS.filter((mission) => isMissionComplete(state, mission)).length;
 }
 
-export function recordDailyEvent(type: DailyEventType, amount = 1, now: Date = new Date()): DailyProgress {
-    const state = loadDailyProgress(now);
-    const add = (id: string, value: number): void => {
-        const mission = DAILY_MISSIONS.find((m) => m.id === id);
-        if (!mission) {
-            return;
+export interface DailyEventOptions {
+    now?: Date;
+    /** Level id for `perLevel` missions; ignored by the others. */
+    levelId?: number;
+}
+
+export function recordDailyEvent(
+    type: DailyEventType,
+    amount = 1,
+    options: DailyEventOptions = {}
+): DailyProgress {
+    const state = loadDailyProgress(options.now ?? new Date());
+    const increment = Math.max(0, Math.floor(amount));
+
+    for (const mission of DAILY_MISSIONS) {
+        if (mission.event !== type) {
+            continue;
         }
 
-        state.progress[id] = Math.min(mission.target, Math.max(0, Math.floor(state.progress[id] ?? 0) + Math.max(0, Math.floor(value))));
-    };
+        if (mission.perLevel) {
+            if (!Number.isFinite(options.levelId)) {
+                continue;
+            }
+            const levelId = Math.floor(options.levelId as number);
+            const seen = state.levels[mission.id] ?? [];
+            if (seen.includes(levelId)) {
+                continue;
+            }
+            seen.push(levelId);
+            state.levels[mission.id] = seen;
+            state.progress[mission.id] = Math.min(mission.target, seen.length);
+            continue;
+        }
 
-    switch (type) {
-        case 'play':
-            add('play3', amount);
-            break;
-        case 'complete':
-            add('complete2', amount);
-            break;
-        case 'destroy':
-            add('destroy100', amount);
-            break;
-        case 'fire':
-            add('fire2', amount);
-            break;
-        case 'bomb':
-            add('bomb2', amount);
-            break;
+        const previous = Math.max(0, Math.floor(state.progress[mission.id] ?? 0));
+        state.progress[mission.id] = Math.min(mission.target, previous + increment);
     }
 
     persist(state);
@@ -202,7 +234,7 @@ export function recordDailyEvent(type: DailyEventType, amount = 1, now: Date = n
 }
 
 export function claimDailyReward(missionId: string, now: Date = new Date()): { claimed: boolean; coins: number } {
-    const mission = DAILY_MISSIONS.find((m) => m.id === missionId);
+    const mission = DAILY_MISSIONS.find((candidate) => candidate.id === missionId);
     if (!mission) {
         return { claimed: false, coins: 0 };
     }
@@ -216,9 +248,9 @@ export function claimDailyReward(missionId: string, now: Date = new Date()): { c
     persist(state);
     addCoins(mission.reward);
     if (mission.grants) {
-        Object.entries(mission.grants).forEach(([type, amount]) => {
-            if (amount && amount > 0) {
-                grantPowerUp(type as keyof PowerUpInventory, amount);
+        Object.entries(mission.grants).forEach(([type, grantAmount]) => {
+            if (grantAmount && grantAmount > 0) {
+                grantPowerUp(type as keyof PowerUpInventory, grantAmount);
             }
         });
     }

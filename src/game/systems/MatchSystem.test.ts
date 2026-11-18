@@ -26,11 +26,16 @@ class FakeGrid {
         );
     }
 
-    floatingBubbles(): FakeBubble[] {
-        const anchors = this.bubbles.filter((bubble) => bubble.row === 0);
+    floatingBubbles(excludedCells: readonly Cell[] = []): FakeBubble[] {
+        const excluded = new Set(excludedCells.map((cell) => `${cell.row}:${cell.col}`));
+        const anchors = this.bubbles.filter(
+            (bubble) => bubble.row === 0 && !excluded.has(`${bubble.row}:${bubble.col}`)
+        );
 
         if (anchors.length === 0) {
-            return [...this.bubbles];
+            return this.bubbles.filter(
+                (bubble) => !excluded.has(`${bubble.row}:${bubble.col}`)
+            );
         }
 
         const connected = new Set<string>();
@@ -45,7 +50,7 @@ class FakeGrid {
 
             const key = `${current.row}:${current.col}`;
 
-            if (connected.has(key)) {
+            if (connected.has(key) || excluded.has(key)) {
                 continue;
             }
 
@@ -54,7 +59,7 @@ class FakeGrid {
             for (const neighbour of neighbourCells(current.row, current.col)) {
                 const neighbourKey = `${neighbour.row}:${neighbour.col}`;
 
-                if (connected.has(neighbourKey)) {
+                if (connected.has(neighbourKey) || excluded.has(neighbourKey)) {
                     continue;
                 }
 
@@ -66,7 +71,10 @@ class FakeGrid {
             }
         }
 
-        return this.bubbles.filter((bubble) => !connected.has(`${bubble.row}:${bubble.col}`));
+        return this.bubbles.filter((bubble) => {
+            const key = `${bubble.row}:${bubble.col}`;
+            return !excluded.has(key) && !connected.has(key);
+        });
     }
 
     colorCluster(row: number, col: number): FakeBubble[] {
@@ -363,5 +371,27 @@ describe('predict (predicted destruction preview)', () => {
 
         expect(destroyed).toHaveLength(2);
         expect(destroyed.every((bubble) => bubble.color === 'blue')).toBe(true);
+    });
+
+    it('includes unsupported bubbles without highlighting unaffected anchored bubbles', () => {
+        const grid = new FakeGrid([
+            { row: 0, col: 0, color: 'red' },
+            { row: 0, col: 1, color: 'red' },
+            { row: 1, col: 0, color: 'green' },
+            { row: 2, col: 0, color: 'green' },
+            { row: 0, col: 5, color: 'blue' },
+            { row: 1, col: 5, color: 'blue' },
+        ]);
+        const match = new MatchSystem(grid as never);
+
+        const destroyed = match.predict(0, 2, 'red');
+
+        expect(destroyed.map(({ row, col }) => `${row}:${col}`).sort()).toEqual([
+            '0:0',
+            '0:1',
+            '1:0',
+            '2:0',
+        ]);
+        expect(grid.bubbles).toHaveLength(6);
     });
 });

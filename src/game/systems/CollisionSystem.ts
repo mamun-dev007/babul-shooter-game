@@ -19,8 +19,14 @@ export interface ImpactEvent {
     hitCell: Cell | null;
 }
 
-/** Cap a stalled frame so a tab switch cannot move the bubble across the board. */
-const MAX_FRAME_MS = 50;
+/**
+ * Cap a stalled frame so a tab switch cannot move the bubble across the board,
+ * but keep it high enough that a low-end 15-20 FPS device still moves the
+ * projectile at full speed. Long frames are split into small substeps below,
+ * so this cap never turns into a speed penalty.
+ */
+const MAX_FRAME_MS = 100;
+const MAX_SUBSTEP_MS = 25;
 const MAX_BOUNCES_PER_STEP = 24;
 const PREDICTION_MAX_DISTANCE = 5000;
 const PREDICTION_SAMPLE_DISTANCE = 16;
@@ -38,40 +44,68 @@ export class CollisionSystem {
      * the first bubble or ceiling contact. Wall bounces are reflected back into
      * `velocity`, so gameplay and rendering stay in sync.
      */
-    step(bubble: Bubble, velocity: Velocity, deltaMs: number): ImpactEvent | null {
+    step(
+        bubble: Bubble,
+        velocity: Velocity,
+        deltaMs: number,
+        onWallBounce?: () => void
+    ): ImpactEvent | null {
         const speed = Math.hypot(velocity.x, velocity.y);
 
         if (speed <= 0) {
             return null;
         }
 
-        const delta = Math.max(0, Math.min(deltaMs, MAX_FRAME_MS));
-        const distance = (speed * delta) / 1000;
+        const totalMs = Math.max(0, Math.min(deltaMs, MAX_FRAME_MS));
 
-        if (distance <= 0) {
+        if (totalMs <= 0) {
             return null;
         }
 
-        const result = marchBubble(
-            { x: bubble.x, y: bubble.y },
-            velocity,
-            distance,
-            this.obstacles(),
-            { maxBounces: MAX_BOUNCES_PER_STEP, ceilingY: this.grid.collisionCeilingY }
-        );
+        const obstacles = this.obstacles();
+        let remaining = totalMs;
+        let position = { x: bubble.x, y: bubble.y };
+        let direction = { x: velocity.x / speed, y: velocity.y / speed };
+        let bounces = 0;
 
-        bubble.setPosition(result.position.x, result.position.y);
-        velocity.x = result.direction.x * speed;
-        velocity.y = result.direction.y * speed;
+        // Substep long frames so travel distance stays proportional to real
+        // time on slow devices. Each march is still a continuous sweep, so a
+        // fast projectile can never skip a wall or a bubble.
+        while (remaining > 0) {
+            const slice = Math.min(remaining, MAX_SUBSTEP_MS);
+            const result = marchBubble(
+                position,
+                direction,
+                (speed * slice) / 1000,
+                obstacles,
+                { maxBounces: MAX_BOUNCES_PER_STEP, ceilingY: this.grid.collisionCeilingY }
+            );
 
-        if (!result.hit) {
-            return null;
+            position = result.position;
+            direction = result.direction;
+            bounces += result.bounces;
+            remaining -= slice;
+
+            if (result.hit) {
+                bubble.setPosition(position.x, position.y);
+                velocity.x = direction.x * speed;
+                velocity.y = direction.y * speed;
+                if (bounces > 0) {
+                    onWallBounce?.();
+                }
+                return { kind: result.hit.kind, hitCell: result.hit.cell };
+            }
         }
 
-        return {
-            kind: result.hit.kind,
-            hitCell: result.hit.cell,
-        };
+        bubble.setPosition(position.x, position.y);
+        velocity.x = direction.x * speed;
+        velocity.y = direction.y * speed;
+
+        if (bounces > 0) {
+            onWallBounce?.();
+        }
+
+        return null;
     }
 
     resolveCell(x: number, y: number, hitCell: Cell | null): Cell | null {
@@ -116,11 +150,12 @@ export class CollisionSystem {
             }
         );
 
-        if (result.hit?.kind !== 'bubble' || !result.hit.cell) {
+        if (!result.hit) {
             return [];
         }
 
-        const cell = this.resolveCell(result.position.x, result.position.y, result.hit.cell);
+        const hitCell = result.hit.kind === 'bubble' ? result.hit.cell : null;
+        const cell = this.resolveCell(result.position.x, result.position.y, hitCell);
 
         if (!cell) {
             return [];

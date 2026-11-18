@@ -168,6 +168,10 @@ nodes near the viewport are rendered while scrolling.
   colour changes. Board changes invalidate it through the guide's hide/show
   lifecycle.
 - The level map uses one static star field instead of dozens of tweened stars.
+- The Coin Store lays out the whole catalogue as geometry up front but only
+  builds the cards in and around the viewport, a few per frame, in nearest-first
+  order. Built cards are kept for the scene's lifetime, so scrolling back never
+  recreates them, and the scroll position is restored per filter.
 - The production payload is roughly 1.45 MB raw / 381 KB gzip. Phaser accounts
   for 1.32 MB raw / 342 KB gzip of that; there are no downloaded art or audio
   files beyond the 4.9 KB favicon. The unused template background, logo and

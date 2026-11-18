@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-    appId: 'com.example.bubbleshooter',
+    appId: 'com.mamun.bubbleshooter',
     appName: 'Bubble Shooter',
     webDir: 'dist',
     server: {

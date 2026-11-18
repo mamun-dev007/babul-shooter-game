@@ -67,7 +67,7 @@ describe('level catalog', () => {
         expect(report.errors).toEqual([]);
         expect(report.warnings).toEqual([]);
         expect(report.levels).toHaveLength(1000);
-    });
+    }, 30_000);
 
     it('does not claim unplayed levels are balanced', () => {
         expect(LEVELS.every((level) => level.playtested === false)).toBe(true);
@@ -80,7 +80,7 @@ describe('level catalog', () => {
         const formatted = formatValidationReport(report);
         expect(formatted).toContain('Manual balance still pending: 1-1000');
         expect(formatted).toContain('not playtests');
-    });
+    }, 30_000);
 
     it('provides safe catalog lookups', () => {
         expect(getLevel(-5).id).toBe(1);

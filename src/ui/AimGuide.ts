@@ -1,4 +1,4 @@
-import { BUBBLE_DIAMETER, BUBBLE_RADIUS, bubbleTexture } from '../game/config';
+import { BUBBLE_DIAMETER, BUBBLE_RADIUS, bubbleTexture, type BubbleColorName } from '../game/config';
 import type { Bubble } from '../game/objects/Bubble';
 import type { Shooter } from '../game/objects/Shooter';
 import type { CollisionSystem } from '../game/systems/CollisionSystem';
@@ -32,6 +32,7 @@ export class AimGuide {
     private visible = false;
     private lastAngle: number | null = null;
     private lastTexture: string | null = null;
+    private lastColor: BubbleColorName | null = null;
     private lastMode: 'normal' | 'fire' | 'bomb' = 'normal';
     /** Bubbles the predicted shot would destroy through a match. */
     private targets: Bubble[] = [];
@@ -60,6 +61,7 @@ export class AimGuide {
 
         const angle = this.shooter.getAimAngle();
         const mode = this.bombMode ? 'bomb' : this.fireMode ? 'fire' : 'normal';
+        const color = this.shooter.currentColor;
         const texture = this.bombMode ? 'powerup-bomb' : this.fireMode ? 'icon-fire' : bubbleTexture(this.shooter.currentColor);
 
         // The scene calls show() every frame. Prediction walks the whole board
@@ -67,9 +69,16 @@ export class AimGuide {
         // changed. Hiding the guide invalidates the cache, which also covers
         // board edits that happen while a bubble is in flight. The glow layer
         // re-pulses every frame so its lighting animation never stalls.
-        if (!wasVisible || angle !== this.lastAngle || texture !== this.lastTexture || mode !== this.lastMode) {
+        if (
+            !wasVisible ||
+            angle !== this.lastAngle ||
+            texture !== this.lastTexture ||
+            color !== this.lastColor ||
+            mode !== this.lastMode
+        ) {
             this.lastAngle = angle;
             this.lastTexture = texture;
+            this.lastColor = color;
             this.lastMode = mode;
 
             const muzzle = this.shooter.getMuzzlePosition();
@@ -90,10 +99,12 @@ export class AimGuide {
         this.visible = false;
         this.lastAngle = null;
         this.lastTexture = null;
+        this.lastColor = null;
         this.lastMode = 'normal';
         this.graphics.clear();
         this.glow.clear();
         this.ghost.setVisible(false);
+        this.targets = [];
     }
 
     destroy(): void {
@@ -135,9 +146,6 @@ export class AimGuide {
         const wave = (Math.sin((now % PULSE_CYCLE_MS) / PULSE_CYCLE_MS * Math.PI * 2) + 1) / 2;
 
         for (const bubble of this.targets) {
-            // Sample each bubble's own palette so mixed colours could never
-            // bleed: the halo always matches the bubble it wraps.
-            const palette = trajectoryPalette(bubble.color);
             // The wave slightly grows the outermost ring and brightens the
             // inner fills; the bubble artwork itself is never touched.
             const ringPad = 1.5 + wave * 2.5;
@@ -160,6 +168,7 @@ export class AimGuide {
                 continue;
             }
 
+            const palette = trajectoryPalette(bubble.color);
             this.glow.fillStyle(palette.halo, 0.08 + wave * 0.06);
             this.glow.fillCircle(bubble.x, bubble.y, BUBBLE_RADIUS + ringPad + 6);
             this.glow.fillStyle(palette.dot, 0.12 + wave * 0.12);
@@ -191,16 +200,20 @@ export class AimGuide {
             impactFill: 0xff8a1f,
             impactStroke: 0xfff1a8,
         };
-        const palette = this.bombMode ? bombPalette : this.fireMode ? firePalette : trajectoryPalette(this.shooter.currentColor);
+        const palette = this.bombMode
+            ? bombPalette
+            : this.fireMode
+                ? firePalette
+                : trajectoryPalette(this.shooter.currentColor);
 
         for (let index = 0; index < points.length - 1; index += 2) {
             const point = points[index];
 
-            this.graphics.fillStyle(palette.halo, 0.22);
+            this.graphics.fillStyle(palette.dot, 0.22);
             this.graphics.fillCircle(point.x, point.y, 6);
             this.graphics.fillStyle(palette.dot, 0.98);
             this.graphics.fillCircle(point.x, point.y, 4);
-            this.graphics.fillStyle(palette.highlight, 0.78);
+            this.graphics.fillStyle(palette.dot, 0.78);
             this.graphics.fillCircle(point.x - 0.8, point.y - 0.8, 1.2);
         }
 

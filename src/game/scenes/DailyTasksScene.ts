@@ -2,9 +2,11 @@ import { Scene } from 'phaser';
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { loadProgress } from '../utils/storage';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
-import { fadeInScene, goToScene } from './transitions';
+import { fadeInScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { attachRelayout, worldHeight, worldWidth } from '../layout';
+import { hidesInGameBackButtonForViewport } from '../levelBreakpoints';
+import { dailyCardContentHeight, dailyCardLayout, type DailyCardLayout } from '../daily/dailyCardLayout';
 import {
     DAILY_MISSIONS,
     claimDailyReward,
@@ -24,6 +26,7 @@ export interface DailyTasksSceneData {
 
 const SCROLL_TOP = 150;
 const DRAG_THRESHOLD = 10;
+
 
 export class DailyTasksScene extends Scene {
     private locked = false;
@@ -63,6 +66,7 @@ export class DailyTasksScene extends Scene {
         this.popup = null;
         this.scrollY = 0;
         installUiAudio(this);
+        gameAudio.setMusicMode('menu');
         this.createBackground();
         this.createHeader();
         this.createSummary();
@@ -94,25 +98,27 @@ export class DailyTasksScene extends Scene {
 
     private createHeader(): void {
         const width = worldWidth();
-        const back = this.add.container(74, 52).setDepth(40);
-        const backBg = this.add.graphics();
-        backBg.fillStyle(0x020617, 0.45);
-        backBg.fillRoundedRect(-58, -21, 116, 42, 21);
-        backBg.fillStyle(0x0a3d91, 1);
-        backBg.fillRoundedRect(-58, -24, 116, 42, 21);
-        backBg.fillGradientStyle(0x4fc8f5, 0x4fc8f5, 0x168bff, 0x168bff, 1);
-        backBg.fillRoundedRect(-54, -20, 108, 34, 17);
-        backBg.fillStyle(0xffffff, 0.22);
-        backBg.fillRoundedRect(-46, -18, 92, 12, 6);
-        backBg.lineStyle(2, 0xffffff, 0.9);
-        backBg.strokeRoundedRect(-58, -24, 116, 42, 21);
-        const backText = this.add
-            .text(0, -3, '‹ BACK', { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 3 })
-            .setOrigin(0.5);
-        const backHit = this.add.circle(0, 0, 30, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
-        backHit.on('pointerdown', () => this.goBack());
-        addPressFx(this, backHit, back, { hoverScale: 1.04, pressScale: 0.95 });
-        back.add([backBg, backText, backHit]);
+        if (!hidesInGameBackButtonForViewport()) {
+            const back = this.add.container(74, 52).setDepth(40);
+            const backBg = this.add.graphics();
+            backBg.fillStyle(0x020617, 0.45);
+            backBg.fillRoundedRect(-58, -21, 116, 42, 21);
+            backBg.fillStyle(0x0a3d91, 1);
+            backBg.fillRoundedRect(-58, -24, 116, 42, 21);
+            backBg.fillGradientStyle(0x4fc8f5, 0x4fc8f5, 0x168bff, 0x168bff, 1);
+            backBg.fillRoundedRect(-54, -20, 108, 34, 17);
+            backBg.fillStyle(0xffffff, 0.22);
+            backBg.fillRoundedRect(-46, -18, 92, 12, 6);
+            backBg.lineStyle(2, 0xffffff, 0.9);
+            backBg.strokeRoundedRect(-58, -24, 116, 42, 21);
+            const backText = this.add
+                .text(0, -3, '‹ BACK', { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 3 })
+                .setOrigin(0.5);
+            const backHit = this.add.circle(0, 0, 30, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+            backHit.on('pointerdown', () => this.goBack());
+            addPressFx(this, backHit, back, { hoverScale: 1.04, pressScale: 0.95 });
+            back.add([backBg, backText, backHit]);
+        }
 
         this.add
             .text(width / 2, 52, 'DAILY TASKS', { fontFamily: FONT_DISPLAY, fontSize: '28px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 5 })
@@ -161,7 +167,7 @@ export class DailyTasksScene extends Scene {
         this.renderedDay = state.day;
         this.countdownText?.setText(`Resets in ${formatCountdown(dhakaCountdownMs())}`);
         const done = completedCount(state);
-        this.progressText?.setText(`${done}/6 Completed`);
+        this.progressText?.setText(`${done}/${DAILY_MISSIONS.length} Completed`);
         if (this.progressFill) {
             const barW = Math.min(420, worldWidth() - 64);
             const barX = worldWidth() / 2 - barW / 2;
@@ -194,15 +200,14 @@ export class DailyTasksScene extends Scene {
     }
 
     private listWidth(): number {
-        // Matches the Gift Items mobile (single-column) card width and side
-        // margins: slightly narrower, gently centred cards.
-        return Math.min(420, worldWidth() - 48);
+        return dailyCardLayout(worldWidth()).width;
     }
 
     private buildList(): void {
         this.listContainer?.destroy(true);
         this.listMaskShape?.destroy();
-        const origin = { x: worldWidth() / 2 - this.listWidth() / 2, y: SCROLL_TOP, w: this.listWidth(), h: worldHeight() - SCROLL_TOP - 16 };
+        const layout = dailyCardLayout(worldWidth());
+        const origin = { x: worldWidth() / 2 - layout.width / 2, y: SCROLL_TOP, w: layout.width, h: worldHeight() - SCROLL_TOP - 16 };
         this.listContainer = this.add.container(origin.x, origin.y).setDepth(5);
         this.listMaskShape = this.make.graphics({ x: origin.x, y: origin.y }, false);
         this.listMaskShape.fillStyle(0xffffff, 1);
@@ -211,13 +216,11 @@ export class DailyTasksScene extends Scene {
 
         const state = loadDailyProgress();
         this.renderedDay = state.day;
-        const cardH = 116;
-        const gap = 16;
         this.championCards = [];
         DAILY_MISSIONS.forEach((mission, index) => {
-            const x = this.listWidth() / 2;
-            const y = index * (cardH + gap) + cardH / 2;
-            this.listContainer?.add(this.createMissionCard(x, y, this.listWidth(), cardH, mission, state));
+            const x = layout.width / 2;
+            const y = index * (layout.height + layout.gap) + layout.height / 2;
+            this.listContainer?.add(this.createMissionCard(x, y, layout, mission, state));
         });
         this.scrollY = 0;
         this.listContainer.setY(origin.y);
@@ -227,29 +230,34 @@ export class DailyTasksScene extends Scene {
     private createMissionCard(
         x: number,
         y: number,
-        width: number,
-        height: number,
+        layout: DailyCardLayout,
         mission: (typeof DAILY_MISSIONS)[number],
         state: DailyProgress
     ): Phaser.GameObjects.Container {
+        const { width, height, scale: s } = layout;
+        const font = (base: number): string => `${Math.round(base * s)}px`;
         const card = this.add.container(x, y);
         const progress = missionProgress(state, mission);
         const complete = progress >= mission.target;
         const claimed = state.claimed.includes(mission.id);
+        const radius = 20 * s;
+
+        // Same panel: shadow → gradient → highlight → rim, all scaled with
+        // the card so the design/colours stay identical at the larger size.
         const g = this.add.graphics();
         g.fillStyle(0x020617, 0.5);
-        g.fillRoundedRect(-width / 2, -height / 2 + 7, width, height, 20);
+        g.fillRoundedRect(-width / 2, -height / 2 + 7 * s, width, height, radius);
         g.fillGradientStyle(0x47b9c8, 0x47b9c8, 0x157a9b, 0x157a9b, 1);
-        g.fillRoundedRect(-width / 2, -height / 2, width, height, 20);
+        g.fillRoundedRect(-width / 2, -height / 2, width, height, radius);
         g.fillStyle(0xffffff, 0.16);
-        g.fillRoundedRect(-width / 2 + 12, -height / 2 + 8, width - 24, 30, 12);
-        g.lineStyle(3, complete && !claimed ? 0xffc928 : 0xe8faff, 0.95);
-        g.strokeRoundedRect(-width / 2, -height / 2, width, height, 20);
+        g.fillRoundedRect(-width / 2 + 12 * s, -height / 2 + 8 * s, width - 24 * s, 30 * s, 12 * s);
+        g.lineStyle(3 * s, complete && !claimed ? 0xffc928 : 0xe8faff, 0.95);
+        g.strokeRoundedRect(-width / 2, -height / 2, width, height, radius);
         card.add(g);
 
-        // Icon (drawn, matching the bubble-shooter palette).
-        const icon = this.add.graphics();
-        const iconX = -width / 2 + 38;
+        // Icon (drawn in the original local units, scaled with the card).
+        const icon = this.add.graphics().setScale(s);
+        const iconX = -width / (2 * s) + 38;
         if (mission.icon === 'play') {
             icon.fillStyle(0xffffff, 1);
             icon.fillTriangle(iconX - 7, -10, iconX - 7, 10, iconX + 10, 0);
@@ -281,69 +289,73 @@ export class DailyTasksScene extends Scene {
         }
         card.add(icon);
 
-        const leftW = width - 180;
-        const leftCenter = -width / 2 + 76 + leftW / 2;
+        const leftW = width - 180 * s;
+        const leftCenter = -width / 2 + 76 * s + leftW / 2;
         const title = this.add
-            .text(leftCenter, -height / 2 + 24, mission.title, { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff', stroke: '#075a8a', strokeThickness: 3 })
+            .text(leftCenter, -height / 2 + 24 * s, mission.title, { fontFamily: FONT_DISPLAY, fontSize: font(15), color: '#ffffff', stroke: '#075a8a', strokeThickness: 3 * s })
             .setOrigin(0.5);
         const description = this.add
-            .text(leftCenter, -height / 2 + 44, mission.description, { fontFamily: FONT, fontSize: '11px', color: '#e0fbff', align: 'center' })
+            .text(leftCenter, -height / 2 + 44 * s, mission.description, {
+                fontFamily: FONT, fontSize: font(11), color: '#e0fbff', align: 'center',
+                wordWrap: { width: Math.max(80, leftW - 8) },
+            })
             .setOrigin(0.5);
         const counter = this.add
-            .text(leftCenter, -height / 2 + 62, `${progress}/${mission.target}`, { fontFamily: FONT_DISPLAY, fontSize: '12px', color: '#fff8e1' })
+            .text(leftCenter, -height / 2 + 70 * s, `${progress}/${mission.target}`, { fontFamily: FONT_DISPLAY, fontSize: font(12), color: '#fff8e1' })
             .setOrigin(0.5);
         counter.setName(`progress-${mission.id}`);
         card.add([title, description, counter]);
 
         // Progress bar.
-        const barW = Math.min(200, leftW);
+        const barW = Math.min(200 * s, leftW);
+        const barH = 10 * s;
         const barX = leftCenter - barW / 2;
-        const barY = height / 2 - 44;
+        const barY = height / 2 - 38 * s;
         const bar = this.add.graphics();
         bar.fillStyle(0x020617, 0.85);
-        bar.fillRoundedRect(barX, barY, barW, 10, 5);
+        bar.fillRoundedRect(barX, barY, barW, barH, barH / 2);
         const ratio = progress / mission.target;
         if (ratio > 0) {
             bar.fillGradientStyle(0xffe38a, 0xffe38a, 0xffb300, 0xffb300, 1);
-            bar.fillRoundedRect(barX, barY, Math.max(10, barW * ratio), 10, 5);
+            bar.fillRoundedRect(barX, barY, Math.max(barH, barW * ratio), barH, barH / 2);
         }
-        bar.lineStyle(1.5, 0xffffff, 0.7);
-        bar.strokeRoundedRect(barX, barY, barW, 10, 5);
+        bar.lineStyle(1.5 * s, 0xffffff, 0.7);
+        bar.strokeRoundedRect(barX, barY, barW, barH, barH / 2);
         card.add(bar);
 
         // Reward + Claim state on the right.
-        const rightX = width / 2 - 78;
+        const rightX = width / 2 - 78 * s;
         const reward = this.add
-            .text(rightX, -height / 2 + 36, `+${mission.reward} Coins`, { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#fff8e1', stroke: '#7c2d12', strokeThickness: 2 })
+            .text(rightX, -height / 2 + 36 * s, `+${mission.reward} Coins`, { fontFamily: FONT_DISPLAY, fontSize: font(13), color: '#fff8e1', stroke: '#7c2d12', strokeThickness: 2 * s })
             .setOrigin(0.5);
         card.add(reward);
 
         if (claimed) {
             const done = this.add
-                .text(rightX, height / 2 - 32, '✓ Claimed', { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#bbf7d0', stroke: '#064e2a', strokeThickness: 2 })
+                .text(rightX, height / 2 - 32 * s, '✓ Claimed', { fontFamily: FONT_DISPLAY, fontSize: font(13), color: '#bbf7d0', stroke: '#064e2a', strokeThickness: 2 * s })
                 .setOrigin(0.5);
             done.setName(`claimed-${mission.id}`);
             card.add(done);
         } else {
-            const claimW = Math.min(100, width - leftW - 60);
-            const claimH = 24;
+            const claimW = Math.min(100 * s, width - leftW - 60 * s);
+            const claimH = 24 * s;
             const claimX = rightX;
-            const claimY = height / 2 - 32;
+            const claimY = height / 2 - 32 * s;
             const claimBg = this.add.graphics();
             const drawClaim = (hover: boolean): void => {
                 claimBg.clear();
                 claimBg.fillStyle(0x020617, 0.45);
-                claimBg.fillRoundedRect(claimX - claimW / 2, claimY - claimH / 2 + 3, claimW, claimH, claimH / 2);
+                claimBg.fillRoundedRect(claimX - claimW / 2, claimY - claimH / 2 + 3 * s, claimW, claimH, claimH / 2);
                 const top = complete ? (hover ? 0xffe38a : 0xffd54d) : 0x64748b;
                 const bottom = complete ? (hover ? 0xffb300 : 0xf59e0b) : 0x475569;
                 claimBg.fillGradientStyle(top, top, bottom, bottom, 1);
                 claimBg.fillRoundedRect(claimX - claimW / 2, claimY - claimH / 2, claimW, claimH, claimH / 2);
-                claimBg.lineStyle(2, 0xffffff, 0.95);
+                claimBg.lineStyle(2 * s, 0xffffff, 0.95);
                 claimBg.strokeRoundedRect(claimX - claimW / 2, claimY - claimH / 2, claimW, claimH, claimH / 2);
             };
             drawClaim(false);
             const claimText = this.add
-                .text(claimX, claimY, complete ? 'CLAIM' : 'IN PROGRESS', { fontFamily: FONT_DISPLAY, fontSize: '10px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2 })
+                .text(claimX, claimY, complete ? 'CLAIM' : 'IN PROGRESS', { fontFamily: FONT_DISPLAY, fontSize: font(10), color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2 * s })
                 .setOrigin(0.5);
             claimText.setName(`claim-${mission.id}`);
             const claimHit = this.add.rectangle(claimX, claimY, claimW, claimH, 0xffffff, 0.001).setInteractive({ useHandCursor: complete });
@@ -361,14 +373,15 @@ export class DailyTasksScene extends Scene {
             card.add([claimBg, claimText, claimHit]);
         }
 
-        if (mission.id === 'champion' && complete && !claimed) {
+        // The hardest task keeps the original celebratory pulse.
+        if (mission.id === 'two-efficient' && complete && !claimed) {
             this.championCards.push(card);
             this.tweens.add({ targets: card, scaleX: 1.03, scaleY: 1.03, duration: 500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
         }
 
         const stateLabel = claimed ? 'Reward Claimed' : complete ? 'Completed' : progress > 0 ? 'In Progress' : 'Not Started';
         const stateText = this.add
-            .text(-width / 2 + 76, -height / 2 + 24, stateLabel, { fontFamily: FONT_DISPLAY, fontSize: '9px', color: '#e0fbff' })
+            .text(-width / 2 + 16 * s, -height / 2 + 16 * s, stateLabel, { fontFamily: FONT_DISPLAY, fontSize: font(9), color: '#e0fbff' })
             .setOrigin(0, 0.5)
             .setName(`state-${mission.id}`);
         card.add(stateText);
@@ -387,7 +400,7 @@ export class DailyTasksScene extends Scene {
             return;
         }
 
-        gameAudio.playSfx('click');
+        gameAudio.playSfx('coin');
         this.refreshBalances();
         const mission = DAILY_MISSIONS.find((m) => m.id === missionId);
         const extra = mission?.grants
@@ -454,7 +467,8 @@ export class DailyTasksScene extends Scene {
 
     private applyScroll(next: number): void {
         const originY = SCROLL_TOP;
-        const contentHeight = DAILY_MISSIONS.length * 116 + (DAILY_MISSIONS.length - 1) * 16;
+        const layout = dailyCardLayout(worldWidth());
+        const contentHeight = dailyCardContentHeight(DAILY_MISSIONS.length, layout);
         const min = Math.min(0, worldHeight() - originY - 16 - contentHeight);
         this.scrollY = Math.max(min, Math.min(0, next));
         this.listContainer?.setY(originY + this.scrollY);
@@ -482,17 +496,37 @@ export class DailyTasksScene extends Scene {
         const body = this.add.text(cardX, cardY - 10, bodyText, { fontFamily: FONT, fontSize: '16px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 2, align: 'center', lineSpacing: 6 }).setOrigin(0.5);
         const ok = this.add.text(cardX, cardY + 66, 'OK', { fontFamily: FONT_DISPLAY, fontSize: '18px', color: '#ffffff', backgroundColor: '#22c55e', padding: { x: 36, y: 10 } }).setOrigin(0.5).setInteractive({ useHandCursor: true });
         ok.setName('popup-ok');
-        const close = (): void => {
-            layer.destroy(true);
-            this.popup = null;
-            this.claiming = false;
-            this.buildList();
-        };
+        const close = (): void => this.dismissPopup();
         ok.on('pointerdown', close);
         dim.on('pointerdown', close);
         addPressFx(this, ok, ok, { hoverScale: 1.05, pressScale: 0.95 });
         layer.add([dim, card, title, body, ok]);
         this.popup = layer;
+        gameAudio.playSfx('popupOpen');
+    }
+
+    /** Closes the topmost popup only; never chains into a navigation action. */
+    private dismissPopup(): void {
+        const popup = this.popup;
+        this.popup = null;
+        if (!popup) {
+            return;
+        }
+        gameAudio.playSfx('popupClose');
+        popup.destroy(true);
+        this.claiming = false;
+        this.buildList();
+    }
+
+    public handleAndroidBack(): void {
+        if (this.popup) {
+            this.dismissPopup();
+            return;
+        }
+        if (this.locked || this.claiming) {
+            return;
+        }
+        this.goBack();
     }
 
     private goBack(): void {
@@ -502,9 +536,10 @@ export class DailyTasksScene extends Scene {
 
         this.locked = true;
         if (this.returnTo === 'GameScene') {
-            goToScene(this, this.returnTo, { level: this.returnLevel }, 180);
+            goToSceneInstant(this, this.returnTo, { level: this.returnLevel, instant: true });
         } else {
-            goToScene(this, this.returnTo, undefined, 180);
+            goToSceneInstant(this, this.returnTo, { instant: true });
         }
     }
 }
+

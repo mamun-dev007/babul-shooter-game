@@ -1,4 +1,5 @@
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../game/config';
+import { drawSideControlDisc } from './gameplayChrome';
 import { addPressFx } from './uiFx';
 
 export interface HudCallbacks {
@@ -15,15 +16,18 @@ import {
     levelX,
     NOTICE_X,
     NOTICE_Y,
+    PAUSE_BUTTON_RADIUS,
     PLUS_BUTTON_HIT_RADIUS,
     PLUS_BUTTON_RADIUS,
     PLUS_BUTTON_XS,
     PLUS_BUTTON_Y,
+    POWER_BUTTON_RADIUS,
     PROGRESS_HEIGHT,
     PROGRESS_WIDTH,
     PROGRESS_X,
     PROGRESS_Y,
     scoreX,
+    SHOTS_CAPTION_Y,
     SHOTS_X,
     SHOTS_Y,
     TOOLBAR_HEIGHT,
@@ -32,8 +36,8 @@ import {
     TOOLBAR_Y,
 } from './hudAnchors';
 
-const PAUSE_RADIUS = 25;
-const POWER_BUTTON_RADIUS = 27;
+const POWER_ICON_SIZE = Math.round(POWER_BUTTON_RADIUS * 1.76);
+const PAUSE_ICON_SIZE = Math.round(PAUSE_BUTTON_RADIUS * 1.15);
 
 const POWER_UP_BUTTONS = [
     { id: 'bomb', key: 'powerup-bomb', label: 'BOMB' },
@@ -202,11 +206,11 @@ export class HUD {
 
             const icon = scene.add
                 .image(0, 0, item.key)
-                .setDisplaySize(48, 48)
+                .setDisplaySize(POWER_ICON_SIZE, POWER_ICON_SIZE)
                 .setDepth(2);
 
             const hitArea = scene.add
-                .circle(0, 0, 32, 0xffffff, 0.001)
+                .circle(0, 0, POWER_BUTTON_RADIUS + 8, 0xffffff, 0.001)
                 .setInteractive({ useHandCursor: true })
                 .setDepth(4);
 
@@ -214,26 +218,26 @@ export class HUD {
             if (liquid) contents.push(liquid);
 
             if (item.id === 'fireball') {
-                // Same badge position/size/style as the Bomb counter.
+                // Quantity badge: same style as other power counters, scaled with button.
                 this.fireChargeLabel = scene.add
-                    .text(0, 24, '0', {
+                    .text(0, 36, '0', {
                         fontFamily: FONT_DISPLAY,
-                        fontSize: '8px',
+                        fontSize: '12px',
                         color: '#ffffff',
                         stroke: '#123a35',
-                        strokeThickness: 3,
+                        strokeThickness: 4,
                     })
                     .setOrigin(0.5)
                     .setDepth(3);
                 contents.push(icon, this.fireChargeLabel, hitArea);
             } else if (item.id === 'bomb') {
                 this.bombStatusLabel = scene.add
-                    .text(0, 24, '0', {
+                    .text(0, 36, '0', {
                         fontFamily: FONT_DISPLAY,
-                        fontSize: '8px',
+                        fontSize: '12px',
                         color: '#f7e8d0',
                         stroke: '#123a35',
-                        strokeThickness: 3,
+                        strokeThickness: 4,
                     })
                     .setOrigin(0.5)
                     .setAlpha(0.72)
@@ -243,12 +247,12 @@ export class HUD {
                 // Color Change counter: same badge position/size/style as the
                 // Bomb and Fire counters, showing live inventory quantity.
                 this.colorChargeLabel = scene.add
-                    .text(0, 24, '0', {
+                    .text(0, 36, '0', {
                         fontFamily: FONT_DISPLAY,
-                        fontSize: '8px',
+                        fontSize: '12px',
                         color: '#ffffff',
                         stroke: '#123a35',
-                        strokeThickness: 3,
+                        strokeThickness: 4,
                     })
                     .setOrigin(0.5)
                     .setDepth(3);
@@ -280,12 +284,9 @@ export class HUD {
         });
 
         // Plus badges sit on the upper-right edge of the bomb, color and
-        // fire buttons (~50% inside the power circle, ~50% outside) at
-        // (powerX + 18.5, powerY - 18.5), all identical to the Bomb badge.
-        // They are created AFTER the power buttons so the full plus circle
-        // renders on top and stays clearly visible over the overlap;
-        // derived from the toolbar anchors, so they reflow on every
-        // viewport size and stay inside the screen.
+        // fire buttons (~50% inside the power circle, ~50% outside), all
+        // identical to the Bomb badge. Created after power buttons so the full
+        // plus circle renders on top and stays clearly visible over the overlap.
         const plusTargets = [
             { id: 'bomb' as const, x: PLUS_BUTTON_XS[0], label: 'Add Bomb' },
             { id: 'colorChanger' as const, x: PLUS_BUTTON_XS[1], label: 'Add Color' },
@@ -300,48 +301,49 @@ export class HUD {
         this.pauseButton = this.createIconButton(
             TOOLBAR_BUTTON_XS[3],
             TOOLBAR_BUTTON_Y + 1,
-            PAUSE_RADIUS,
+            PAUSE_BUTTON_RADIUS,
             'Pause',
             () => callbacks.onPause()
         );
 
         this.pauseIcon = scene.add
             .image(0, 0, 'icon-pause')
-            .setDisplaySize(29, 29);
+            .setDisplaySize(PAUSE_ICON_SIZE, PAUSE_ICON_SIZE);
         this.pauseButton.add(this.pauseIcon);
         toolbarItems.push(this.pauseButton);
 
-        const shotsCard = scene.add.graphics();
-        shotsCard.fillStyle(0x2d5be8, 0.96);
-        shotsCard.fillRoundedRect(SHOTS_X - 37, SHOTS_Y, 74, 34, 15);
-        shotsCard.lineStyle(1.5, 0xffffff, 0.9);
-        shotsCard.strokeRoundedRect(SHOTS_X - 37, SHOTS_Y, 74, 34, 15);
+        const shotsButton = scene.add.graphics().setPosition(SHOTS_X, SHOTS_Y);
+        drawSideControlDisc(shotsButton);
 
         const shotsLabel = scene.add
-            .text(SHOTS_X - 22, SHOTS_Y + 8, 'SHOTS', {
+            .text(SHOTS_X, SHOTS_Y - 20, 'SHOTS', {
                 fontFamily: FONT,
                 fontSize: '8px',
                 color: '#dceaff',
+                stroke: '#0a2b6b',
+                strokeThickness: 2,
             })
-            .setOrigin(0, 0.5);
+            .setOrigin(0.5);
 
         this.shotsValue = scene.add
-            .text(SHOTS_X + 20, SHOTS_Y + 17, '00', {
+            .text(SHOTS_X, SHOTS_Y + 1, '00', {
                 fontFamily: FONT_DISPLAY,
-                fontSize: '18px',
+                fontSize: '20px',
                 color: '#ffffff',
+                stroke: '#0a2b6b',
+                strokeThickness: 2,
             })
             .setOrigin(0.5);
 
         this.shotsCaption = scene.add
-            .text(SHOTS_X, SHOTS_Y + 40, '', {
+            .text(SHOTS_X, SHOTS_CAPTION_Y, '', {
                 fontFamily: FONT,
                 fontSize: '7px',
-                color: '#ffffff',
-                stroke: '#27608a',
+                color: '#eaf4ff',
+                stroke: '#0a2b6b',
                 strokeThickness: 2,
             })
-            .setOrigin(0.5, 0);
+            .setOrigin(0.5);
 
         this.container = scene.add.container(0, 0, [
             progressBg,
@@ -351,7 +353,7 @@ export class HUD {
             this.scoreValue,
             this.objectiveText,
             ...toolbarItems,
-            shotsCard,
+            shotsButton,
             shotsLabel,
             this.shotsValue,
             this.shotsCaption,
@@ -692,11 +694,11 @@ export class HUD {
 
     private drawToolbar(graphics: Phaser.GameObjects.Graphics): void {
         graphics.fillStyle(0xdff3ff, 0.72);
-        graphics.fillRoundedRect(12, TOOLBAR_Y, GAME_WIDTH - 24, TOOLBAR_HEIGHT, 22);
+        graphics.fillRoundedRect(12, TOOLBAR_Y, GAME_WIDTH - 24, TOOLBAR_HEIGHT, 28);
         graphics.lineStyle(1.5, 0xffffff, 0.96);
-        graphics.strokeRoundedRect(14, TOOLBAR_Y, GAME_WIDTH - 28, TOOLBAR_HEIGHT, 24);
+        graphics.strokeRoundedRect(14, TOOLBAR_Y, GAME_WIDTH - 28, TOOLBAR_HEIGHT, 30);
         graphics.fillStyle(0xffffff, 0.24);
-        graphics.fillRoundedRect(24, TOOLBAR_Y + 5, GAME_WIDTH - 48, 3, 2);
+        graphics.fillRoundedRect(24, TOOLBAR_Y + 6, GAME_WIDTH - 48, 4, 2);
     }
 
     private createIconButton(
@@ -710,23 +712,23 @@ export class HUD {
         const graphics = this.scene.add.graphics();
 
         graphics.fillStyle(0x174873, 0.35);
-        graphics.fillCircle(0, 3, radius + 2);
+        graphics.fillCircle(0, 4, radius + 3);
         graphics.fillStyle(0x2775dc, 0.98);
         graphics.fillCircle(0, 0, radius);
-        graphics.lineStyle(1.5, 0xffffff, 0.92);
+        graphics.lineStyle(2, 0xffffff, 0.92);
         graphics.strokeCircle(0, 0, radius);
         graphics.fillStyle(0xffffff, 0.18);
-        graphics.fillCircle(-4, -7, radius - 9);
+        graphics.fillCircle(-6, -11, radius - 14);
 
         const hit = this.scene.add
-            .circle(0, 0, radius + 6, 0xffffff, 0.001)
+            .circle(0, 0, radius + 8, 0xffffff, 0.001)
             .setInteractive({ useHandCursor: true });
 
         hit.on('pointerdown', onPress);
         addPressFx(this.scene, hit, button, { hoverScale: 1.06, pressScale: 0.92 });
 
         button.add([graphics, hit]);
-        button.setSize(radius * 2 + 12, radius * 2 + 12);
+        button.setSize(radius * 2 + 16, radius * 2 + 16);
         button.setData('label', label);
 
         return button;
@@ -738,12 +740,10 @@ export class HUD {
     }
 
     /**
-     * Scaled duplicate of the middle Color Change button: identical
+     * Scaled duplicate of the Color Change button card: identical
      * background layers, gradient, rings, highlight and overall styling,
-     * with only the icon replaced by a white plus. Interactive with a
-     * 44px hit circle for touch, but the press is intentionally a no-op
-     * — no purchase/ad/reward logic is wired. The original Color Change
-     * button itself is untouched.
+     * with only the icon replaced by a white plus. Preserves existing
+     * interaction and navigation behavior.
      */
     private createPlusButton(
         x: number,
@@ -768,12 +768,11 @@ export class HUD {
         // Exact Color Change button card, scaled to the plus radius — same
         // colors, gradient and borders, no new palette or style invented.
         this.drawColorChangerCard(graphics, PLUS_BUTTON_RADIUS);
-        // Plus icon in place of the Color Change icon: the same white used
-        // for the button's rings/highlight, drawn as two rounded bars like
-        // the plus badge inside the Color Change artwork.
+        // Plus icon in place of the Color Change icon: same white, scaled
+        // proportionally with the larger badge.
         graphics.fillStyle(0xffffff, 1);
-        graphics.fillRoundedRect(-6, -1.5, 12, 3, 1.5);
-        graphics.fillRoundedRect(-1.5, -6, 3, 12, 1.5);
+        graphics.fillRoundedRect(-9, -2.25, 18, 4.5, 2);
+        graphics.fillRoundedRect(-2.25, -9, 4.5, 18, 2);
 
         const hit = this.scene.add
             .circle(0, 0, PLUS_BUTTON_HIT_RADIUS, 0xffffff, 0.001)

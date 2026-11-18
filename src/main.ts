@@ -1,6 +1,7 @@
 import { AUTO, Game, Scale } from 'phaser';
 import './styles/game.css';
-import { computeWorldSize, setWorldSize, worldSize } from './game/layout';
+import { computeWorldSize, measureViewport, setWorldSize, worldSize } from './game/layout';
+import { positionBootSplashBar, syncBootSplashBarToCanvas } from './game/bootSplashBar';
 import { BootScene } from './game/scenes/BootScene';
 import { LoadingScene } from './game/scenes/LoadingScene';
 import { MenuScene } from './game/scenes/MenuScene';
@@ -11,12 +12,17 @@ import { DailyTasksScene } from './game/scenes/DailyTasksScene';
 import { GiftItemsScene } from './game/scenes/GiftItemsScene';
 import { GameScene } from './game/scenes/GameScene';
 import { gameAudio } from './game/audio/GameAudio';
+import { startAndroidBackNavigation } from './game/input/androidBack';
 // Registers the active rewarded-ad provider (Yandex Games SDK) at boot.
 import './ads/config';
 import { syncHudAnchors } from './ui/hudAnchors';
 
-const initialWorld = computeWorldSize(window.innerWidth, window.innerHeight);
+const initialViewport = measureViewport();
+const initialWorld = computeWorldSize(initialViewport.width, initialViewport.height);
 setWorldSize(initialWorld);
+// The boot splash bar was placed by an inline script before this bundle
+// ran; re-anchor it with the exact world math now that it is available.
+positionBootSplashBar(initialViewport.width, initialViewport.height);
 syncHudAnchors();
 
 const config: Phaser.Types.Core.GameConfig = {
@@ -31,7 +37,10 @@ const config: Phaser.Types.Core.GameConfig = {
         // actual device aspect. Resize recalculates this viewport below.
         mode: Scale.FIT,
         autoCenter: Scale.CENTER_BOTH,
-        expandParent: true,
+        // The container already owns the full CSS viewport; letting Phaser
+        // resize the parent to the canvas would fight that layout and can
+        // reintroduce gaps while the address bar animates.
+        expandParent: false,
     },
     input: {
         // Two active pointers: the primary finger aims/fires while a second
@@ -68,15 +77,17 @@ const startGame = (): void => {
             return;
         }
         const game = new Game(config);
+        startAndroidBackNavigation(game);
+        if (new URLSearchParams(window.location.search).has('debug')) {
+            (window as Window & { __bubbleGame?: Game }).__bubbleGame = game;
+        }
         let resizeFrame = 0;
 
         const fitToViewport = (): void => {
             cancelAnimationFrame(resizeFrame);
             resizeFrame = requestAnimationFrame(() => {
-                const viewport = window.visualViewport;
-                const availableWidth = viewport?.width ?? window.innerWidth;
-                const availableHeight = viewport?.height ?? window.innerHeight;
-                const nextWorld = computeWorldSize(availableWidth, availableHeight);
+                const viewport = measureViewport();
+                const nextWorld = computeWorldSize(viewport.width, viewport.height);
                 const current = worldSize();
 
                 if (nextWorld.width !== current.width || nextWorld.height !== current.height) {
@@ -85,6 +96,12 @@ const startGame = (): void => {
                 }
                 game.scale.setGameSize(nextWorld.width, nextWorld.height);
                 game.scale.refresh();
+                // While the boot splash is still up, keep its bar glued to
+                // the canvas' live rect so an early viewport change stays
+                // pixel-true. No-op once the splash has been removed.
+                if (game.canvas) {
+                    syncBootSplashBarToCanvas(game.canvas);
+                }
             });
         };
 

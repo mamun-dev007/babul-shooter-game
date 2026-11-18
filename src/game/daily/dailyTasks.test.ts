@@ -29,44 +29,119 @@ afterEach(() => {
     vi.resetModules();
 });
 
-describe('daily tasks', () => {
-    it('tracks progress, completes and claims exactly once', async () => {
+describe('hard daily tasks', () => {
+    it('replaces the old conditions with a harder, fully tracked set', async () => {
+        install();
+        const daily = await load();
+
+        expect(daily.DAILY_MISSIONS).toHaveLength(9);
+        expect(daily.DAILY_REWARD_TOTAL).toBe(300);
+        const ids = daily.DAILY_MISSIONS.map((mission) => mission.id);
+        expect(ids).not.toContain('play3');
+        expect(ids).not.toContain('complete2');
+        expect(ids).not.toContain('destroy100');
+        expect(ids).not.toContain('champion');
+        for (const mission of daily.DAILY_MISSIONS) {
+            expect(mission.target).toBeGreaterThan(1);
+            expect(mission.reward).toBeGreaterThanOrEqual(25);
+            expect(mission.description.length).toBeGreaterThan(10);
+        }
+    });
+
+    it('tracks bubble totals, streaks, fire, bomb and big chains immediately', async () => {
+        install();
+        const daily = await load();
+        const now = new Date('2026-11-06T06:00:00Z');
+        const mission = (id: string) => daily.DAILY_MISSIONS.find((candidate) => candidate.id === id)!;
+
+        let state = daily.recordDailyEvent('bubblesCleared', 40, { now });
+        expect(daily.missionProgress(state, mission('clear-150-bubbles'))).toBe(40);
+
+        state = daily.recordDailyEvent('streakBubbles', 24, { now });
+        state = daily.recordDailyEvent('streakBubbles', 24, { now });
+        expect(daily.missionProgress(state, mission('forty-streak'))).toBe(40);
+
+        state = daily.recordDailyEvent('fireBubbles', 12, { now });
+        state = daily.recordDailyEvent('fireBubbles', 20, { now });
+        expect(daily.missionProgress(state, mission('fire-bubbles'))).toBe(25);
+
+        state = daily.recordDailyEvent('bombBubbles', 10, { now });
+        state = daily.recordDailyEvent('bombBubbles', 15, { now });
+        expect(daily.missionProgress(state, mission('bomb-bubbles'))).toBe(20);
+
+        state = daily.recordDailyEvent('chainBubbles', 8, { now });
+        state = daily.recordDailyEvent('chainBubbles', 16, { now });
+        expect(daily.missionProgress(state, mission('chain-reactions'))).toBe(20);
+    });
+
+    it('counts each level once for per-level objectives', async () => {
+        install();
+        const daily = await load();
+        const now = new Date('2026-11-06T06:00:00Z');
+        const mission = (id: string) => daily.DAILY_MISSIONS.find((candidate) => candidate.id === id)!;
+
+        for (let level = 0; level < 3; level += 1) {
+            daily.recordDailyEvent('completeLevel', 1, { now, levelId: level });
+            daily.recordDailyEvent('cleanLevel', 1, { now, levelId: level });
+        }
+        // Replays of already-counted levels must not advance anything.
+        daily.recordDailyEvent('completeLevel', 1, { now, levelId: 0 });
+        daily.recordDailyEvent('cleanLevel', 1, { now, levelId: 0 });
+
+        let state = daily.loadDailyProgress(now);
+        expect(daily.missionProgress(state, mission('five-different-levels'))).toBe(3);
+        expect(daily.missionProgress(state, mission('three-no-power'))).toBe(3);
+
+        // Distinct levels only: five different ids complete that objective.
+        daily.recordDailyEvent('completeLevel', 1, { now, levelId: 3 });
+        daily.recordDailyEvent('completeLevel', 1, { now, levelId: 4 });
+        state = daily.loadDailyProgress(now);
+        expect(daily.missionProgress(state, mission('five-different-levels'))).toBe(5);
+        expect(daily.isMissionComplete(state, mission('five-different-levels'))).toBe(true);
+    });
+
+    it('awards efficient and star objectives only from qualifying level outcomes', async () => {
+        install();
+        const daily = await load();
+        const now = new Date('2026-11-06T06:00:00Z');
+        const mission = (id: string) => daily.DAILY_MISSIONS.find((candidate) => candidate.id === id)!;
+
+        daily.recordDailyEvent('efficientLevel', 1, { now, levelId: 0 });
+        daily.recordDailyEvent('starLevel', 1, { now, levelId: 0 });
+        // A level must not be counted twice even if replayed better.
+        daily.recordDailyEvent('efficientLevel', 1, { now, levelId: 0 });
+        daily.recordDailyEvent('starLevel', 1, { now, levelId: 0 });
+        daily.recordDailyEvent('efficientLevel', 1, { now, levelId: 1 });
+        daily.recordDailyEvent('starLevel', 1, { now, levelId: 1 });
+        daily.recordDailyEvent('starLevel', 1, { now, levelId: 2 });
+
+        const state = daily.loadDailyProgress(now);
+        expect(daily.missionProgress(state, mission('two-efficient'))).toBe(2);
+        expect(daily.missionProgress(state, mission('three-two-stars'))).toBe(3);
+        expect(daily.completedCount(state)).toBeGreaterThan(0);
+    });
+
+    it('claims a completed task exactly once with its difficulty-based reward', async () => {
         install();
         const daily = await load();
         const storage = await loadStorage();
         storage.addCoins(0);
         const now = new Date('2026-11-06T06:00:00Z');
-
-        let state = daily.loadDailyProgress(now);
-        expect(daily.DAILY_MISSIONS).toHaveLength(6);
-        expect(daily.DAILY_REWARD_TOTAL).toBe(55);
-
-        state = daily.recordDailyEvent('play', 3, now);
-        expect(daily.missionProgress(state, daily.DAILY_MISSIONS[0])).toBe(3);
-        expect(daily.isMissionComplete(state, daily.DAILY_MISSIONS[0])).toBe(true);
-
-        state = daily.recordDailyEvent('destroy', 150, now);
-        expect(daily.missionProgress(state, daily.DAILY_MISSIONS[2])).toBe(100);
-
         const before = storage.loadProgress().coins;
-        expect(daily.claimDailyReward('play3', now).claimed).toBe(true);
-        expect(daily.claimDailyReward('play3', now).claimed).toBe(false);
-        expect(storage.loadProgress().coins).toBe(before + 5);
-    });
 
-    it('unlocks champion only after all five regular missions complete', async () => {
-        install();
-        const daily = await load();
-        const now = new Date('2026-11-06T06:00:00Z');
-        daily.recordDailyEvent('play', 3, now);
-        daily.recordDailyEvent('complete', 2, now);
-        daily.recordDailyEvent('destroy', 100, now);
-        daily.recordDailyEvent('fire', 2, now);
-        daily.recordDailyEvent('bomb', 2, now);
-        const state = daily.loadDailyProgress(now);
-        const champion = daily.DAILY_MISSIONS[5];
-        expect(daily.missionProgress(state, champion)).toBe(5);
-        expect(daily.completedCount(state)).toBe(6);
+        // Not complete yet: no payout.
+        daily.recordDailyEvent('bubblesCleared', 149, { now });
+        expect(daily.claimDailyReward('clear-150-bubbles', now).claimed).toBe(false);
+        daily.recordDailyEvent('bubblesCleared', 1, { now });
+
+        expect(daily.claimDailyReward('clear-150-bubbles', now).claimed).toBe(true);
+        expect(daily.claimDailyReward('clear-150-bubbles', now).claimed).toBe(false);
+        expect(storage.loadProgress().coins).toBe(before + 25);
+
+        // A harder task pays more than an easier one.
+        const easy = daily.DAILY_MISSIONS.find((mission) => mission.id === 'clear-150-bubbles')!;
+        const hard = daily.DAILY_MISSIONS.find((mission) => mission.id === 'two-efficient')!;
+        expect(hard.reward).toBeGreaterThan(easy.reward);
     });
 
     it('resets for a new Dhaka day but not for a backwards clock', async () => {
@@ -74,11 +149,23 @@ describe('daily tasks', () => {
         const daily = await load();
         const dayOne = new Date('2026-11-06T06:00:00Z');
         const dayTwo = new Date('2026-11-07T06:00:00Z');
-        daily.recordDailyEvent('play', 3, dayOne);
-        expect(daily.loadDailyProgress(dayOne).progress.play3).toBe(3);
-        expect(daily.loadDailyProgress(dayTwo).progress.play3).toBeUndefined();
+
+        daily.recordDailyEvent('bubblesCleared', 30, { now: dayOne });
+        expect(daily.loadDailyProgress(dayOne).progress['clear-150-bubbles']).toBe(30);
+        expect(daily.loadDailyProgress(dayTwo).progress['clear-150-bubbles']).toBeUndefined();
+
         // Backwards clock keeps the later day (no replay).
-        daily.recordDailyEvent('play', 3, dayTwo);
+        daily.recordDailyEvent('bubblesCleared', 30, { now: dayTwo });
         expect(daily.loadDailyProgress(dayOne).day).toBe('2026-11-07');
+    });
+
+    it('does not reset progress when the screen is reopened', async () => {
+        install();
+        const daily = await load();
+        const now = new Date('2026-11-06T06:00:00Z');
+        daily.recordDailyEvent('bubblesCleared', 60, { now });
+        expect(daily.loadDailyProgress(now).progress['clear-150-bubbles']).toBe(60);
+        expect(daily.loadDailyProgress(now).progress['clear-150-bubbles']).toBe(60);
+        expect(daily.loadDailyProgress(now).claimed).toEqual([]);
     });
 });

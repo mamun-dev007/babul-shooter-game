@@ -16,13 +16,16 @@
     "cap:android": "npx cap open android"
   },
   "dependencies": {
-    "@capacitor/core": "^7.0.0",
+    "@capacitor-community/admob": "^8.4.0",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.6.10",
     "phaser": "4.0.0",
     "terser": "^5.39.0"
   },
   "devDependencies": {
-    "@capacitor/android": "^7.0.0",
-    "@capacitor/cli": "^7.0.0",
+    "@capacitor/android": "^7.6.10",
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^7.6.10",
     "typescript": "~5.7.2",
     "vite": "^6.3.1",
     "vitest": "^5.0.5"

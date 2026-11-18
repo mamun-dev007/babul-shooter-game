@@ -55,12 +55,9 @@ export class MatchSystem {
     /**
      * Mutation-free twin of `resolve`: would placing a `color` bubble at the
      * currently *empty* snap cell (row, col) destroy a matching group? Walks
-     * the same colour-connected BFS `resolve` runs through
-     * `grid.colorCluster` — seeded from the snap cell's neighbours because
-     * the projected bubble itself is not on the board yet — and applies the
-     * identical ≥3 rule. Any other colour is ignored exactly as `resolve`
-     * would ignore it, so unrelated bubbles can never be returned. Returns
-     * the bubbles the match would destroy; empty ⇒ no valid match.
+     * the same colour-connected neighbours as `resolve`, then asks the grid
+     * which other bubbles would become unsupported if the matched cells and
+     * the virtual shot bubble were removed. The prediction is mutation-free.
      */
     predict(row: number, col: number, color: BubbleColorName): Bubble[] {
         const cluster: Bubble[] = [];
@@ -97,9 +94,19 @@ export class MatchSystem {
             }
         }
 
-        // resolve() only destruction-fires when the placed bubble completes
-        // a group of three or more; the same threshold governs the prediction.
-        return cluster.length + 1 >= 3 ? cluster : [];
+        // resolve() only destroys a group when the placed bubble completes a
+        // group of three or more. Then it also removes every bubble no longer
+        // connected to the ceiling after that group (including the virtual
+        // shot bubble) is removed.
+        if (cluster.length + 1 < 3) {
+            return [];
+        }
+
+        const matchedCells = [
+            { row, col },
+            ...cluster.map((bubble) => ({ row: bubble.row, col: bubble.col })),
+        ];
+        return [...cluster, ...this.grid.floatingBubbles(matchedCells)];
     }
 
     private cellKey(row: number, col: number): string {

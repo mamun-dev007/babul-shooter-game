@@ -315,6 +315,30 @@ export function toggleMusic(): boolean {
     return progress.music;
 }
 
+export function setMasterVolume(value: number): number {
+    const progress = loadProgress();
+    progress.masterVolume = clampVolume(value, DEFAULT_PROGRESS.masterVolume!);
+    saveProgress(progress);
+    notifySettingsChanged();
+    return progress.masterVolume;
+}
+
+export function setMusicVolume(value: number): number {
+    const progress = loadProgress();
+    progress.musicVolume = clampVolume(value, DEFAULT_PROGRESS.musicVolume!);
+    saveProgress(progress);
+    notifySettingsChanged();
+    return progress.musicVolume;
+}
+
+export function setSfxVolume(value: number): number {
+    const progress = loadProgress();
+    progress.sfxVolume = clampVolume(value, DEFAULT_PROGRESS.sfxVolume!);
+    saveProgress(progress);
+    notifySettingsChanged();
+    return progress.sfxVolume;
+}
+
 export function addCoins(amount: number): number {
     const progress = loadProgress();
     const delta = Math.max(-progress.coins, Math.floor(Number(amount) || 0));

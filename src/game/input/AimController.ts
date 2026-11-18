@@ -103,7 +103,7 @@ export class AimController {
             return;
         }
 
-        if (Input.Keyboard.JustDown(this.keys.pause)) {
+        if (Input.Keyboard.JustDown(this.keys.pause) && !isModalInputLocked()) {
             this.config.onPause();
         }
 

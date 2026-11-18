@@ -45,6 +45,22 @@ const makeGrid = (): GridSystem => new GridSystem({} as Phaser.Scene);
 const asBubble = (bubble: FakeBubble): Bubble => bubble as unknown as Bubble;
 
 describe('fixed-board GridSystem scrolling', () => {
+    it('predicts floating bubbles after excluding a matched group without changing the board', () => {
+        const grid = makeGrid();
+        const matchedAnchor = makeBubble();
+        const newlyUnsupported = makeBubble();
+        const otherAnchor = makeBubble();
+        const stillSupported = makeBubble();
+
+        grid.placeBubble(asBubble(matchedAnchor), 0, 0);
+        grid.placeBubble(asBubble(newlyUnsupported), 1, 0);
+        grid.placeBubble(asBubble(otherAnchor), 0, 5);
+        grid.placeBubble(asBubble(stillSupported), 1, 5);
+
+        expect(grid.floatingBubbles([{ row: 0, col: 0 }])).toEqual([asBubble(newlyUnsupported)]);
+        expect(grid.bubbleCount).toBe(4);
+    });
+
     it('moves existing bubbles without ever creating or removing any', () => {
         const grid = makeGrid();
         const top = makeBubble();

@@ -6,14 +6,124 @@
     <meta name="theme-color" content="#bfe7ff" />
     <meta name="description" content="Bubble Pop Adventure - aim, match colorful bubbles, and clear each level." />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@800&display=swap" rel="stylesheet">
     <title>Bubble Pop Adventure</title>
-    <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
 <body>
+    <!-- Static boot splash: paints the existing loading artwork immediately,
+         before the JS bundle downloads and Phaser starts. BootScene reuses
+         this same <img> as the Phaser texture (so the file is fetched only
+         once) and LoadingScene removes the splash after rendering it on the
+         canvas. Inline styles keep it independent of the CSS bundle. -->
+    <div
+        id="boot-splash"
+        aria-hidden="true"
+        style="position: fixed; inset: 0; z-index: 10; background: #071c42;"
+    >
+        <img
+            id="boot-splash-image"
+            src="./assets/backgrounds/loading.png"
+            alt=""
+            style="display: block; width: 100%; height: 100%; object-fit: cover; object-position: center;"
+        />
+        <!-- Progress bar mirroring LoadingScene's canvas bar (same geometry,
+             set by the inline script below and src/game/bootSplashBar.ts).
+             Visible from the splash's very first paint: browsers render the
+             artwork progressively as it streams in, so no event can reveal
+             the bar "together" with the artwork's first pixel — keeping it
+             always on screen is the only way the artwork never shows
+             without the bar. -->
+        <div
+            id="boot-splash-bar"
+            style="position: absolute; box-sizing: border-box; border: 0 solid rgba(121, 223, 255, 0.95); border-radius: 999px; background: rgba(7, 21, 47, 0.92);"
+        >
+            <div
+                id="boot-splash-bar-fill"
+                style="position: absolute; box-sizing: border-box; left: 0; top: 0; width: 0px; height: 0px; border-radius: 999px; background: linear-gradient(180deg, #8ef5ff 0%, #29a9df 55%, #1672bc 100%);"
+            ></div>
+        </div>
+        <div
+            id="boot-splash-percent"
+            style="position: absolute; box-sizing: border-box; white-space: nowrap; color: #ffffff; font-family: 'Arial Black', Arial, sans-serif; transform: translate(-50%, -50%);"
+        >0%</div>
+    </div>
+    <script>
+        // Places the boot-splash progress bar before the JS bundle runs, so
+        // the bar is on screen from the splash's first paint. Mirrors
+        // computeWorldSize() + Scale.FIT + loadingBarGeometry() from
+        // src/game/layout.ts and src/game/bootSplashBar.ts — keep in sync.
+        (function () {
+            var bar = document.getElementById('boot-splash-bar');
+            var fill = document.getElementById('boot-splash-bar-fill');
+            var percent = document.getElementById('boot-splash-percent');
+            if (!bar || !fill || !percent) {
+                return;
+            }
+
+            function computeWorld(availW, availH) {
+                var aw = Math.max(1, availW);
+                var ah = Math.max(1, availH);
+                var matchedHeight = 700 * (ah / aw);
+                if (matchedHeight >= 640) {
+                    return { width: 700, height: Math.round(matchedHeight) };
+                }
+                return { width: Math.round(640 * (aw / ah)), height: 640 };
+            }
+
+            function strokeShadows(radius) {
+                var c = '#083d67';
+                var r = radius.toFixed(2);
+                return [
+                    c + ' ' + r + 'px 0 0', c + ' -' + r + 'px 0 0',
+                    c + ' 0 ' + r + 'px 0', c + ' 0 -' + r + 'px 0',
+                    c + ' ' + r + 'px ' + r + 'px 0', c + ' ' + r + 'px -' + r + 'px 0',
+                    c + ' -' + r + 'px ' + r + 'px 0', c + ' -' + r + 'px -' + r + 'px 0'
+                ].join(', ');
+            }
+
+            function position() {
+                var vw = window.innerWidth;
+                var vh = window.innerHeight;
+                var world = computeWorld(vw, vh);
+                var scale = Math.min(vw / world.width, vh / world.height);
+                var left = (vw - world.width * scale) / 2;
+                var top = (vh - world.height * scale) / 2;
+
+                var barWidth = Math.min(600, world.width * 0.9);
+                var barHeight = Math.max(30, Math.min(40, world.height * 0.04));
+                var barX = (world.width - barWidth) / 2;
+                var barY = world.height - Math.max(52, Math.min(world.height * 0.19, world.width * 0.34));
+                var fontSize = Math.round(Math.max(28, Math.min(36, world.width * 0.06)));
+
+                bar.style.left = left + (barX - 1) * scale + 'px';
+                bar.style.top = top + (barY - 1) * scale + 'px';
+                bar.style.width = (barWidth + 2) * scale + 'px';
+                bar.style.height = (barHeight + 2) * scale + 'px';
+                bar.style.borderWidth = 2 * scale + 'px';
+
+                fill.style.left = 2 * scale + 'px';
+                fill.style.top = 2 * scale + 'px';
+                fill.style.height = (barHeight - 6) * scale + 'px';
+                fill.style.width = '0px';
+
+                percent.style.left = left + (world.width / 2) * scale + 'px';
+                percent.style.top = top + (barY + barHeight + Math.max(16, Math.round(barHeight * 0.6))) * scale + 'px';
+                percent.style.fontSize = Math.max(1, Math.round(fontSize * scale)) + 'px';
+                percent.style.textShadow = strokeShadows(2 * scale);
+            }
+
+            function onResize() {
+                if (!bar.isConnected) {
+                    window.removeEventListener('resize', onResize);
+                    return;
+                }
+                position();
+            }
+
+            position();
+            window.addEventListener('resize', onResize);
+        })();
+    </script>
     <div id="app">
         <div id="game-container"></div>
     </div>

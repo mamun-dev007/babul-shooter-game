@@ -4,7 +4,6 @@ import { acquireModalInputLock, releaseModalInputLock } from '../game/input/moda
 import { addCoins, loadProgress } from '../game/utils/storage';
 import { showRewardedAd } from '../ads/rewardedAds';
 import { addPressFx } from './uiFx';
-import { uiFitScale } from '../game/responsive';
 
 export interface GameOverPanelOptions {
     title: string;
@@ -37,6 +36,7 @@ export class GameOverPanel {
     private multiplierBusy = false;
     private continueBusy = false;
     private continueStatus: Phaser.GameObjects.Text | null = null;
+    private panelScale = 1;
 
     get isOpen(): boolean {
         return this.container !== null;
@@ -51,8 +51,27 @@ export class GameOverPanel {
         acquireModalInputLock('gameOver');
 
         const scene = this.scene;
-        const container = scene.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2).setDepth(200);
-        container.setScale(uiFitScale());
+        const won = options.win === true;
+        const cardTop = -210;
+        const cardBottom = won ? 292 : 268;
+        const cardHeight = cardBottom - cardTop;
+        const contentTop = won ? -238 : -255;
+        const contentBottom = cardBottom + 20;
+        const contentCenterY = (contentTop + contentBottom) / 2;
+        const contentHeight = contentBottom - contentTop;
+        const screenMargin = 4;
+        const entranceOvershoot = 1.01;
+        const panelScale = Math.min(
+            1.6,
+            (GAME_WIDTH - screenMargin * 2) / (380 * entranceOvershoot),
+            (GAME_HEIGHT - screenMargin * 2) / (contentHeight * entranceOvershoot)
+        );
+        this.panelScale = panelScale;
+
+        const container = scene.add
+            .container(GAME_WIDTH / 2, GAME_HEIGHT / 2 - contentCenterY * panelScale)
+            .setDepth(200)
+            .setScale(panelScale);
         this.container = container;
         this.tracked = [container];
         this.actionLocked = false;
@@ -68,7 +87,6 @@ export class GameOverPanel {
             event.stopPropagation();
         });
 
-        const won = options.win === true;
         // Green-to-blue glossy card for a win; red stays for a loss.
         const palette = won
             ? {
@@ -105,8 +123,6 @@ export class GameOverPanel {
         const card = scene.add.graphics();
         // Won card is tall: header, stars, score, coin board and the
         // three-button stack all fit fully inside without spilling.
-        const cardBottom = won ? 292 : 268;
-        const cardHeight = cardBottom + 210;
 
         card.fillStyle(palette.shadow, 0.42);
         card.fillRoundedRect(-183, -202, 366, cardHeight + 12, 30);
@@ -358,7 +374,7 @@ export class GameOverPanel {
                     // Single grant of the +2x top-up (5 -> 15 total), once.
                     this.multiplierClaimed = true;
                     addCoins(options.coinReward! * 2);
-                    gameAudio.playSfx('star');
+                    gameAudio.playSfx('coin');
                     earnedValue.setText(`+${options.coinReward! * 3}`);
                     adText.setText('3X CLAIMED');
                     adStatus.setText(`+${options.coinReward! * 2} Coins Added!`);
@@ -372,7 +388,7 @@ export class GameOverPanel {
         if (!won) {
             this.createFailureButton(container, 0, 104, options.replayLabel ?? 'RETRY', 'red', options.onReplay ?? options.onPrimary);
             const continueEnabled = !!options.onContinue && options.continuationEnabled !== false;
-            const continueStatus = scene.add.text(0, 298, '', {
+            const continueStatus = scene.add.text(0, 254, '', {
                 fontFamily: FONT_DISPLAY,
                 fontSize: '10px',
                 color: '#fde68a',
@@ -410,17 +426,46 @@ export class GameOverPanel {
             // Legacy disabled note (no onContinue configured).
         }
 
+        this.applyTextResolution(container, panelScale);
+        gameAudio.playSfx('popupOpen');
+
+        if (won && options.coinReward !== undefined) {
+            scene.time.delayedCall(560, () => {
+                if (this.container === container) {
+                    gameAudio.playSfx('coin');
+                }
+            });
+        }
+
         container.setAlpha(0);
-        container.setScale(0.9);
+        container.setScale(panelScale * 0.9);
 
         scene.tweens.add({
             targets: container,
             alpha: 1,
-            scaleX: 1,
-            scaleY: 1,
+            scaleX: panelScale,
+            scaleY: panelScale,
             duration: 260,
             ease: 'Back.easeOut',
         });
+    }
+
+    /** Re-renders text at the enlarged scale so upscaled titles stay crisp. */
+    private applyTextResolution(
+        object: Phaser.GameObjects.GameObject,
+        resolution: number
+    ): void {
+        if (resolution <= 1) {
+            return;
+        }
+        if (object.type === 'Text') {
+            (object as Phaser.GameObjects.Text).setResolution(resolution);
+            return;
+        }
+        const children = (object as Phaser.GameObjects.Container).list;
+        if (Array.isArray(children)) {
+            children.forEach((child) => this.applyTextResolution(child, resolution));
+        }
     }
 
     /**
@@ -464,12 +509,13 @@ export class GameOverPanel {
         this.actionLocked = true;
         this.scene.tweens.killTweensOf(this.tracked);
         this.tracked = [];
+        gameAudio.playSfx('popupClose');
 
         this.scene.tweens.add({
             targets: container,
             alpha: 0,
-            scaleX: 0.95,
-            scaleY: 0.95,
+            scaleX: this.panelScale * 0.95,
+            scaleY: this.panelScale * 0.95,
             duration: 140,
             ease: 'Quad.easeIn',
             onComplete: () => container.destroy(true),
@@ -583,6 +629,7 @@ export class GameOverPanel {
                 event.stopPropagation();
                 if (this.actionLocked) return;
                 this.actionLocked = true;
+                gameAudio.playSfx('popupClose');
                 onClose();
             });
             button.add([shadow, body, cross, hit]);

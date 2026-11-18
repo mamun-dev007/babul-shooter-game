@@ -37,7 +37,16 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    /* Mobile safe areas: the canvas (and every bottom-anchored HUD element)
+       must never sit under a notch or the iOS home indicator. Desktop and
+       Android report 0 insets, so their layout is unchanged. The plain
+       `padding: 0` first is the fallback for browsers without env(). */
     padding: 0;
+    padding:
+        env(safe-area-inset-top, 0px)
+        env(safe-area-inset-right, 0px)
+        env(safe-area-inset-bottom, 0px)
+        env(safe-area-inset-left, 0px);
 }
 
 @supports (height: 100svh) {

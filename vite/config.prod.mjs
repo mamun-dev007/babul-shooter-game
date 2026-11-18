@@ -41,6 +41,11 @@ export default defineConfig({
     server: {
         port: 8080
     },
+    preview: {
+        host: '0.0.0.0',
+        port: 4173,
+        strictPort: true
+    },
     plugins: [
         phasermsg()
     ]

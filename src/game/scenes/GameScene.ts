@@ -26,19 +26,32 @@ import { MatchSystem } from '../systems/MatchSystem';
 import { computeShooterQueueUpdate, pickRandomDifferentColor, pickSmartShooterColor, type ColorStat } from '../systems/shooterQueue';
 import { levelOutcomeFor } from '../data/levels/scoring';
 import { addCoins, loadProgress, takePendingBonusShots, recordScore, markLevelCompleted, toggleMusic, toggleSound } from '../utils/storage';
-import { recordDailyEvent } from '../daily/dailyTasks';
+import { CHAIN_REACTION_MIN_BUBBLES, EFFICIENT_SHOT_LIMIT, recordDailyEvent } from '../daily/dailyTasks';
 import { AimGuide } from '../../ui/AimGuide';
 import { SettingsPanel } from '../../ui/SettingsPanel';
 import { extraBallsRewardFor, showRewardedAd } from '../../ads/rewardedAds';
-import { gameAudio } from '../audio/GameAudio';
+import { gameAudio, installUiAudio } from '../audio/GameAudio';
 import { BoardScrollController } from '../input/BoardScrollController';
 import { isModalInputLocked, resetModalInputLock } from '../input/modalInputLock';
 import { GameOverPanel } from '../../ui/GameOverPanel';
 import { HUD, type PowerUpId } from '../../ui/HUD';
 import { PausePanel } from '../../ui/PausePanel';
-import { goToScene, goToSceneInstant } from './transitions';
+import { BackConfirmationPanel } from '../../ui/BackConfirmationPanel';
+import { clearTransition, goToSceneInstant } from './transitions';
 import { bubbleTexture } from '../config';
 import { acquireModalInputLock, releaseModalInputLock } from '../input/modalInputLock';
+import {
+    INTRO_BUBBLE_RISE_MS,
+    INTRO_POPUP_ENTER_EASE,
+    INTRO_POPUP_ENTER_MS,
+    INTRO_POPUP_EXIT_EASE,
+    INTRO_POPUP_EXIT_MS,
+    INTRO_POPUP_HOLD_MS,
+    INTRO_BUBBLE_RISE_EASE,
+    introBubbleRiseOffset,
+    introPopupEnterX,
+    introPopupExitX,
+} from './levelIntroAnimation';
 
 interface GameSceneData {
     level?: number;
@@ -66,6 +79,7 @@ export class GameScene extends Scene {
     private boardScroll: BoardScrollController | null = null;
     private boardMaskShape: Phaser.GameObjects.Graphics | null = null;
     private pausePanel: PausePanel | null = null;
+    private leaveGamePanel: BackConfirmationPanel | null = null;
     private get anyModalOpen(): boolean {
         return (
             isModalInputLocked() ||
@@ -103,8 +117,18 @@ export class GameScene extends Scene {
     private extraBallsInProgress = false;
     /** True once this attempt's +5 completion coins have been paid out. */
     private completionRewardGranted = false;
+    /** Daily Tasks: any power-up actually spent during this level attempt. */
+    private levelPowerUsed = false;
+    /** Daily Tasks: bubbles cleared in the current run of non-missing shots. */
+    private streakBubbles = 0;
     private introPopup: Phaser.GameObjects.Container | null = null;
-    private introTimeout: number | null = null;
+    private introBlocker: Phaser.GameObjects.Rectangle | null = null;
+    private introHoldTimer: Phaser.Time.TimerEvent | null = null;
+    private introRise: {
+        readonly bubbles: Bubble[];
+        readonly finalYs: number[];
+        readonly state: { offset: number };
+    } | null = null;
     private introEpoch = 0;
     private introLockHeld = false;
     /** Bumped on shutdown so a completed ad callback can't pay into a new attempt. */
@@ -116,10 +140,19 @@ export class GameScene extends Scene {
     }
 
     create(data?: GameSceneData): void {
+        // Repeated Gameplay entries must always start from a clean timing/modal
+        // state. A previous attempt can be left paused (e.g. exited from the
+        // pause menu), which would freeze intro tweens/timers and wedge input.
+        this.time.paused = false;
+        this.time.removeAllEvents();
+        this.tweens.killAll();
         // Start every attempt with a clean modal lock so a stale popup from
         // a previous scene can never wedge gameplay input. Popups register
         // themselves in the lock while they are visible.
         resetModalInputLock();
+        clearTransition(this);
+        installUiAudio(this);
+        gameAudio.setMusicMode('gameplay');
         // Only the top-most interactive object (dim overlay, popup buttons)
         // may receive a pointer event, so popup clicks cannot fall through
         // to the HUD/board underneath.
@@ -135,9 +168,13 @@ export class GameScene extends Scene {
         this.pauseRestarting = false;
         this.ended = false;
         this.introPopup = null;
-        this.introTimeout = null;
+        this.introBlocker = null;
+        this.introHoldTimer = null;
+        this.introRise = null;
         this.introLockHeld = false;
         this.completionRewardGranted = false;
+        this.levelPowerUsed = false;
+        this.streakBubbles = 0;
         this.activeBubble = null;
         this.projectileIcon = null;
         this.fireTrail = null;
@@ -200,12 +237,6 @@ export class GameScene extends Scene {
         // the playable area; nothing is generated later and the board keeps
         // this fixed position — user input never moves it.
         this.grid.followBoard();
-        // Daily Tasks: count one play per attempt — only now that the board
-        // and launcher exist and actual gameplay is starting. A snapshot
-        // return from the Coin Store is a continuation, not a new attempt.
-        if (!data?.snapshot) {
-            recordDailyEvent('play');
-        }
         // The bubble formation is FIXED on every device: touch drag, swipe,
         // mouse drag, mouse wheel and trackpad pan can never move the board.
         // `canScroll: () => false` makes every scroll path on the controller
@@ -279,6 +310,7 @@ export class GameScene extends Scene {
                 return false;
             }
             this.aimController.cancelPointerInput();
+            gameAudio.playSfx('swap');
             return true;
         });
 
@@ -303,6 +335,8 @@ export class GameScene extends Scene {
         this.shooter.setCurrentColor(snapshot.currentColor);
         this.shooter.setNextColor(snapshot.nextColor);
         this.fireChargeProgressState = snapshot.fireCharge;
+        this.levelPowerUsed = snapshot.levelPowerUsed === true;
+        this.streakBubbles = Math.max(0, Math.floor(snapshot.streakBubbles ?? 0));
         this.selectedPower = null;
         if (snapshot.selectedPower) {
             this.selectPower(snapshot.selectedPower);
@@ -330,6 +364,8 @@ export class GameScene extends Scene {
             nextColor: this.shooter.nextColor,
             selectedPower: this.selectedPower,
             fireCharge: this.fireChargeProgressState,
+            levelPowerUsed: this.levelPowerUsed,
+            streakBubbles: this.streakBubbles,
         };
         goToSceneInstant(this, 'CoinStoreScene', {
             returnTo: 'GameScene',
@@ -351,7 +387,12 @@ export class GameScene extends Scene {
             if (this.activeShotPower === 'fireball') {
                 this.moveFireball(delta);
             } else {
-                const impact = this.collision.step(this.activeBubble, this.bubbleVelocity, delta);
+                const impact = this.collision.step(
+                    this.activeBubble,
+                    this.bubbleVelocity,
+                    delta,
+                    () => gameAudio.playSfx('bounce')
+                );
 
                 if (impact) {
                     this.resolveImpact(impact.hitCell);
@@ -387,6 +428,7 @@ export class GameScene extends Scene {
         // pays exactly 3 extra shots — see requestExtraBalls).
         if (powerUp === 'colorChanger') {
             if (this.changeShooterColor()) {
+                this.levelPowerUsed = true;
                 return true;
             }
 
@@ -408,12 +450,14 @@ export class GameScene extends Scene {
             // Fire is launched only from shared inventory stock.
             if (getPowerUpQuantity('fireball') <= 0) return false;
             this.selectPower(this.selectedPower === 'fireball' ? null : 'fireball');
+            if (this.selectedPower === 'fireball') gameAudio.playSfx('powerup');
             return true;
         }
 
         if (powerUp === 'bomb') {
             if (this.availableBombs <= 0 || this.bombLaunchInFlight) return false;
             this.selectPower(this.selectedPower === 'bomb' ? null : 'bomb');
+            if (this.selectedPower === 'bomb') gameAudio.playSfx('powerup');
             return true;
         }
 
@@ -432,6 +476,8 @@ export class GameScene extends Scene {
                 return false;
             }
 
+            this.levelPowerUsed = true;
+            gameAudio.playSfx('lightning');
             this.refreshPowerUpCounts();
             return true;
         }
@@ -485,6 +531,7 @@ export class GameScene extends Scene {
         // Successful Color Change use: exactly one main ball + one item.
         this.registerShot();
         this.shooter.setCurrentColor(nextColor);
+        gameAudio.playSfx('colorSwitch');
         this.refreshPowerUpCounts();
         // Transient feedback in the game's own banner style, so the change
         // is unmistakable even when the two colours are hard to tell apart.
@@ -519,8 +566,8 @@ export class GameScene extends Scene {
     }
 
     private launchPowerShot(power: Exclude<ShotPower, null>): void {
+        this.levelPowerUsed = true;
         this.alignBoardForShot();
-        const angle = this.shooter.getAimAngle();
         const muzzle = this.shooter.getMuzzlePosition();
         const color = this.shooter.currentColor;
 
@@ -533,15 +580,16 @@ export class GameScene extends Scene {
         this.activeShotPower = power;
         this.activeBubble.setTint(power === 'bomb' ? 0xffa05a : 0xffa32f);
         this.activeBubble.setScale(this.activeBubble.scale * 1.16);
-        this.bubbleVelocity.x = Math.sin(angle) * LAUNCH_SPEED * (power === 'fireball' ? 1.2 : 1);
-        this.bubbleVelocity.y = -Math.cos(angle) * LAUNCH_SPEED * (power === 'fireball' ? 1.2 : 1);
+        const velocity = this.shooter.getLaunchVelocity(LAUNCH_SPEED * (power === 'fireball' ? 1.2 : 1));
+        this.bubbleVelocity.x = velocity.x;
+        this.bubbleVelocity.y = velocity.y;
         this.projectileIcon = this.add
             .image(muzzle.x, muzzle.y, power === 'bomb' ? 'powerup-bomb' : 'icon-fire')
-            .setDisplaySize(power === 'bomb' ? 38 : 42, power === 'bomb' ? 38 : 42)
+            .setDisplaySize(power === 'bomb' ? BUBBLE_DIAMETER : BUBBLE_DIAMETER * 1.1, power === 'bomb' ? BUBBLE_DIAMETER : BUBBLE_DIAMETER * 1.1)
             .setDepth(32);
+        gameAudio.playSfx(power === 'bomb' ? 'bombLaunch' : 'fireLaunch');
 
         if (power === 'fireball') {
-            recordDailyEvent('fire');
             this.fireParticleAccumulator = 0;
             this.fireTrail = this.add.graphics().setDepth(29);
             this.projectileIcon.setTint(0xfff1c0);
@@ -549,7 +597,6 @@ export class GameScene extends Scene {
         }
 
         if (power === 'bomb') {
-            recordDailyEvent('bomb');
             this.projectileIcon.setTint(0xfff0d8);
             return;
         }
@@ -566,7 +613,6 @@ export class GameScene extends Scene {
         }
 
         this.alignBoardForShot();
-        const angle = this.shooter.getAimAngle();
         const muzzle = this.shooter.getMuzzlePosition();
         if (this.selectedPower === 'bomb') {
             // Bomb is consumed only when the projectile actually launches.
@@ -592,9 +638,11 @@ export class GameScene extends Scene {
             return;
         }
         this.activeBubble = new Bubble(this, muzzle.x, muzzle.y, this.shooter.currentColor);
-        this.bubbleVelocity.x = Math.sin(angle) * LAUNCH_SPEED;
-        this.bubbleVelocity.y = -Math.cos(angle) * LAUNCH_SPEED;
+        const velocity = this.shooter.getLaunchVelocity(LAUNCH_SPEED);
+        this.bubbleVelocity.x = velocity.x;
+        this.bubbleVelocity.y = velocity.y;
         this.activeShotPower = null;
+        gameAudio.playSfx('shoot');
         this.registerShot();
         this.shooter.consume();
         this.aimGuide.hide();
@@ -646,7 +694,12 @@ export class GameScene extends Scene {
             const cell = this.collision.resolveCell(bubble.x, bubble.y, hitCell);
             const impactPoint = cell ? this.grid.positionFor(cell.row, cell.col) : { x: bubble.x, y: bubble.y };
             const removed = this.bombExplosionBubbles(impactPoint.x, impactPoint.y);
+            if (removed.length > 0) {
+                recordDailyEvent('bombBubbles', removed.length);
+                recordDailyEvent('bubblesCleared', removed.length);
+            }
             this.createBombImpact(impactPoint.x, impactPoint.y);
+            gameAudio.playSfx('bomb');
             bubble.destroy();
             this.bombLaunchInFlight = false;
             this.availableBombs = getPowerUpQuantity('bomb');
@@ -664,9 +717,14 @@ export class GameScene extends Scene {
             return;
         } else if (power === 'fireball') {
             const removed = this.fireExplosionBubbles(bubble.x, bubble.y);
+            if (removed.length > 0) {
+                recordDailyEvent('fireBubbles', removed.length);
+                recordDailyEvent('bubblesCleared', removed.length);
+            }
             this.recordPowerShotOutcome(removed.length, 'fireball');
             this.score += this.removeBubblesAndFloats(removed, 20);
             this.createFireImpact(bubble.x, bubble.y);
+            gameAudio.playSfx('fire');
             bubble.destroy();
         } else {
             const cell = this.collision.resolveCell(bubble.x, bubble.y, hitCell);
@@ -680,7 +738,11 @@ export class GameScene extends Scene {
             }
 
             this.grid.placeBubble(bubble, cell.row, cell.col);
+            gameAudio.playSfx('collide');
             const outcome = this.matchSystem.resolve(cell.row, cell.col);
+            if (outcome.matched.length > 0) {
+                gameAudio.playSfx('match');
+            }
             this.animateRemovedBubbles([...outcome.matched, ...outcome.floating], outcome.matched.length, outcome.floating.length, true);
             this.score += outcome.score;
         }
@@ -822,29 +884,41 @@ export class GameScene extends Scene {
             return;
         }
 
-        const step = Math.max(0, Math.min(delta, 50)) / 1000;
-        bubble.x += this.bubbleVelocity.x * step;
-        bubble.y += this.bubbleVelocity.y * step;
+        const totalMs = Math.max(0, Math.min(delta, 100));
+        const speed = Math.hypot(this.bubbleVelocity.x, this.bubbleVelocity.y);
+        const distance = (speed * totalMs) / 1000;
+        // Small enough slices that a fast fireball can never jump past a
+        // bubble between two frames (proximity checks are per-substep).
+        const steps = Math.max(1, Math.ceil(distance / (BUBBLE_RADIUS * 0.75)));
+        const sliceMs = steps > 0 ? totalMs / steps : 0;
+        const targets = this.grid.shootableBubbles();
 
-        if (bubble.x < WALL_LEFT || bubble.x > WALL_RIGHT) {
-            bubble.x = PhaserMath.Clamp(bubble.x, WALL_LEFT, WALL_RIGHT);
-            this.bubbleVelocity.x *= -1;
+        for (let index = 0; index < steps; index += 1) {
+            const step = sliceMs / 1000;
+            bubble.x += this.bubbleVelocity.x * step;
+            bubble.y += this.bubbleVelocity.y * step;
+
+            if (bubble.x < WALL_LEFT || bubble.x > WALL_RIGHT) {
+                bubble.x = PhaserMath.Clamp(bubble.x, WALL_LEFT, WALL_RIGHT);
+                this.bubbleVelocity.x *= -1;
+                gameAudio.playSfx('bounce');
+            }
+
+            const hit = targets.find(
+                (target) =>
+                    PhaserMath.Distance.Between(bubble.x, bubble.y, target.x, target.y) <=
+                    BUBBLE_RADIUS * 1.5
+            );
+            if (hit) {
+                this.resolveImpact({ row: hit.row, col: hit.col });
+                return;
+            }
         }
 
-        this.fireParticleAccumulator += delta;
+        this.fireParticleAccumulator += totalMs;
         if (this.fireParticleAccumulator >= 55) {
             this.fireParticleAccumulator = 0;
             this.spawnFireProjectileParticle(bubble.x, bubble.y);
-        }
-
-        const hit = this.grid.shootableBubbles().filter(
-            (target) =>
-                PhaserMath.Distance.Between(bubble.x, bubble.y, target.x, target.y) <= BUBBLE_RADIUS * 1.5
-        );
-
-        if (hit.length > 0) {
-            const target = hit[0];
-            this.resolveImpact({ row: target.row, col: target.col });
         }
     }
 
@@ -916,6 +990,7 @@ export class GameScene extends Scene {
             return;
         }
 
+        gameAudio.playPopCascade(unique.length);
         this.boardUpdatesPending += unique.length;
         this.levelSystem.recordBubbleRemovals(unique.length);
         this.levelSystem.syncBoard(this.grid);
@@ -926,7 +1001,7 @@ export class GameScene extends Scene {
                 targets: bubble,
                 scale: 0.2,
                 alpha: 0,
-                duration: 170,
+                duration: 120,
                 ease: 'Quad.easeIn',
                 onComplete: () => {
                     bubble.destroy();
@@ -945,18 +1020,32 @@ export class GameScene extends Scene {
         this.shotResultRecorded = false;
         const totalDestroyed =
             this.pendingShotDirectRemoved + this.pendingShotUnsupportedRemoved;
-        if (totalDestroyed > 0) {
-            recordDailyEvent('destroy', totalDestroyed);
-        }
         const shotDestroyedAny = totalDestroyed > 0;
+        const shotPower = this.pendingShotPower;
         this.pendingShotDirectRemoved = 0;
         this.pendingShotUnsupportedRemoved = 0;
+
+        // Daily Tasks: only ordinary matches feed the bubble total, the
+        // no-miss streak and the big-chain counter. Power shots are tracked
+        // at their own launch/impact sites with their actual destruction.
+        if (shotPower === null) {
+            if (totalDestroyed > 0) {
+                recordDailyEvent('bubblesCleared', totalDestroyed);
+                this.streakBubbles += totalDestroyed;
+                recordDailyEvent('streakBubbles', totalDestroyed);
+                if (totalDestroyed >= CHAIN_REACTION_MIN_BUBBLES) {
+                    recordDailyEvent('chainBubbles', totalDestroyed);
+                }
+            } else {
+                // A shot that clears nothing breaks the consecutive run.
+                this.streakBubbles = 0;
+            }
+        }
 
         // Gameplay rewards (normal shots only; power shots never count):
         // Fire after the 1/3 successful-shot cycle and Bomb after a 12+
         // destruction burst — each ONLY while its inventory is empty, so
         // purchased/task/gift stock is never topped up by gameplay.
-        const shotPower = this.pendingShotPower;
         this.pendingShotPower = null;
         let fireEarned = false;
         let bombEarned = false;
@@ -981,6 +1070,7 @@ export class GameScene extends Scene {
         }
 
         if (fireEarned || bombEarned) {
+            gameAudio.playSfx('powerup');
             const message = fireEarned && bombEarned
                 ? 'FIRE + BOMB READY!'
                 : bombEarned
@@ -998,6 +1088,7 @@ export class GameScene extends Scene {
                 this.endLevel('lost');
                 return;
             }
+            gameAudio.playSfx('drop');
         }
 
         this.dropAfterShot = false;
@@ -1042,6 +1133,7 @@ export class GameScene extends Scene {
         }
 
         this.ended = true;
+        gameAudio.playSfx(status === 'won' ? 'win' : 'lose');
         this.activeBubble?.destroy();
         this.activeBubble = null;
         this.destroyProjectileEffects();
@@ -1055,8 +1147,24 @@ export class GameScene extends Scene {
         }
 
         if (status === 'won') {
-            recordDailyEvent('complete');
+            // Daily Tasks: each objective is earned from the actual outcome of
+            // this attempt. `perLevel` missions deduplicate by level id, so a
+            // replay of the same level can never count twice.
+            const levelId = this.levelSystem.levelIndex;
+            const dailyOptions = { levelId };
+            recordDailyEvent('completeLevel', 1, dailyOptions);
+            if (!this.levelPowerUsed) {
+                recordDailyEvent('cleanLevel', 1, dailyOptions);
+            }
+            if (shotsUsed <= EFFICIENT_SHOT_LIMIT) {
+                recordDailyEvent('efficientLevel', 1, dailyOptions);
+            }
+            if (outcome.stars >= 2) {
+                recordDailyEvent('starLevel', 1, dailyOptions);
+            }
         }
+        this.levelPowerUsed = false;
+        this.streakBubbles = 0;
 
         // Flat completion reward: exactly 5 Coins for every successful
         // completion (first time or replay), once per attempt. The ended
@@ -1095,10 +1203,10 @@ export class GameScene extends Scene {
                 } else if (this.levelSystem.hasNext) {
                     this.scene.restart({ level: this.levelSystem.levelIndex + 1 });
                 } else {
-                    goToScene(this, 'LevelSelectionScene');
+                    goToSceneInstant(this, 'LevelSelectionScene');
                 }
             },
-            onSecondary: () => goToScene(this, 'LevelSelectionScene'),
+            onSecondary: () => goToSceneInstant(this, 'LevelSelectionScene'),
         });
     }
 
@@ -1132,8 +1240,56 @@ export class GameScene extends Scene {
         return 'granted';
     }
 
+    public handleAndroidBack(): void {
+        if (this.leaveGamePanel?.isOpen || this.ended) {
+            return;
+        }
+
+        if (this.settingsPanel?.isOpen) {
+            this.settingsPanel.hide();
+            return;
+        }
+
+        if (this.paused && this.pausePanel) {
+            this.closePause();
+            return;
+        }
+
+        if (this.introLockHeld || isModalInputLocked() || this.paused) {
+            return;
+        }
+
+        this.setPaused(true);
+        this.aimController.cancelPointerInput();
+        this.leaveGamePanel = new BackConfirmationPanel(this, {
+            title: 'Leave Game?',
+            description: 'Are you sure you want to leave this level and return to the level selection screen?',
+            confirmLabel: 'OK',
+            cancelLabel: 'Resume',
+            onConfirm: () => {
+                this.leaveGamePanel?.destroy();
+                this.leaveGamePanel = null;
+                this.time.paused = false;
+                this.tweens.resumeAll();
+                this.aimController.cancelPointerInput();
+                goToSceneInstant(this, 'LevelSelectionScene');
+            },
+            onCancel: () => {
+                this.leaveGamePanel?.destroy();
+                this.leaveGamePanel = null;
+                this.setPaused(false);
+            },
+        });
+    }
+
     private togglePause(): void {
         if (this.ended) {
+            return;
+        }
+
+        // Intro, modals and overlays own input/flow. Freezing scene time/tweens
+        // during the intro would stall its auto-complete timer and wedge the lock.
+        if (!this.paused && (isModalInputLocked() || this.introLockHeld)) {
             return;
         }
 
@@ -1154,6 +1310,9 @@ export class GameScene extends Scene {
             onRestart: () => {
                 if (!this.pausePanel || !this.paused || this.pauseRestarting) return;
                 this.pauseRestarting = true;
+                // Ensure the restarted attempt never inherits a paused clock.
+                this.time.paused = false;
+                this.tweens.resumeAll();
                 this.pausePanel.destroy();
                 this.pausePanel = null;
                 this.scene.restart({ level: this.currentLevelIndex });
@@ -1180,8 +1339,11 @@ export class GameScene extends Scene {
                 });
             },
             onLevelMap: () => {
+                // Never leave the scene instance paused across navigation/re-entry.
+                this.time.paused = false;
+                this.tweens.resumeAll();
                 this.aimController.cancelPointerInput();
-                goToScene(this, 'LevelSelectionScene');
+                goToSceneInstant(this, 'LevelSelectionScene');
             },
             onClose: () => this.closePause(),
         });
@@ -1456,17 +1618,33 @@ export class GameScene extends Scene {
     }
 
     /**
-     * Level intro banner: sits above the board for exactly 1000ms with no
-     * entrance/exit animation (instant show + destroy). Gameplay input is
-     * modal-locked until it disappears; it never touches game state.
+     * Level intro: the banner slides in from the left, holds centred for ~2s
+     * and slides off to the right while the whole formation rises from below
+     * the visible board floor into its exact final cells. Gameplay input is
+     * modal-locked for the entire sequence. Bubbles are only translated by one
+     * shared offset, so the formation, colours, sizes and spacing are never
+     * altered — the rise ends precisely on the predefined positions.
      */
     private showLevelIntro(): void {
         this.hideLevelIntro();
         const scene = this;
-        const popup = scene.add.container(GAME_WIDTH / 2, GAME_HEIGHT / 2).setDepth(250);
-        popup.setName('level-intro');
+        const epoch = this.introEpoch;
         const w = Math.min(360, GAME_WIDTH - 48);
         const h = 156;
+        const centerX = GAME_WIDTH / 2;
+        const centerY = GAME_HEIGHT / 2;
+        const isCurrent = (): boolean =>
+            this.introEpoch === epoch && this.introPopup !== null;
+
+        // Full-screen absorber kept OUTSIDE the sliding container so HUD and
+        // board input stay blocked from the very first entrance frame.
+        const blocker = scene.add
+            .rectangle(centerX, centerY, GAME_WIDTH, GAME_HEIGHT, 0xffffff, 0.001)
+            .setDepth(249)
+            .setInteractive();
+
+        const popup = scene.add.container(introPopupEnterX(w), centerY).setDepth(250);
+        popup.setName('level-intro');
         const panel = scene.add.graphics();
         panel.fillStyle(0x020617, 0.45);
         panel.fillRoundedRect(-w / 2, -h / 2 + 7, w, h, 26);
@@ -1506,34 +1684,147 @@ export class GameScene extends Scene {
         }).setOrigin(0.5);
         level.setName('intro-level');
 
-        const blocker = scene.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0xffffff, 0.001)
-            .setInteractive();
-        popup.add([blocker, panel, ...decor, title, level]);
+        popup.add([panel, ...decor, title, level]);
         acquireModalInputLock('levelIntro');
         this.introLockHeld = true;
         this.introPopup = popup;
-        // A browser-level timeout (not a scene timer) so dismissal fires
-        // exactly once after 1000ms even across scene restarts/pauses.
-        // The epoch token stops stale fires from touching a later popup.
-        const epoch = this.introEpoch;
-        this.introTimeout = window.setTimeout(() => {
-            if (this.introEpoch !== epoch) {
-                return;
+        this.introBlocker = blocker;
+
+        // The epoch token (bumped by every hide) stops callbacks from a
+        // previous intro touching a later popup after a scene restart.
+        scene.tweens.add({
+            targets: popup,
+            x: centerX,
+            duration: INTRO_POPUP_ENTER_MS,
+            ease: INTRO_POPUP_ENTER_EASE,
+            onComplete: () => {
+                if (!isCurrent()) {
+                    return;
+                }
+
+                this.introHoldTimer = scene.time.delayedCall(INTRO_POPUP_HOLD_MS, () => {
+                    this.introHoldTimer = null;
+
+                    if (!isCurrent()) {
+                        return;
+                    }
+
+                    scene.tweens.add({
+                        targets: popup,
+                        x: introPopupExitX(GAME_WIDTH, w),
+                        duration: INTRO_POPUP_EXIT_MS,
+                        ease: INTRO_POPUP_EXIT_EASE,
+                        onComplete: () => {
+                            if (!isCurrent()) {
+                                return;
+                            }
+
+                            this.hideLevelIntro();
+                        },
+                    });
+                });
+            },
+        });
+
+        this.riseBubblesForIntro(epoch);
+    }
+
+    /**
+     * Translates the existing formation up from below the visible board floor
+     * to its exact final coordinates. One tween drives a single shared offset,
+     * so every bubble moves together and relative spacing is preserved.
+     */
+    private riseBubblesForIntro(epoch: number): void {
+        const bubbles = this.grid.getBubbles();
+
+        if (bubbles.length === 0) {
+            return;
+        }
+
+        const finalYs = bubbles.map((bubble) => bubble.y);
+        const offset = introBubbleRiseOffset(finalYs, BOARD_VIEW_BOTTOM, BUBBLE_RADIUS);
+
+        if (offset <= 0) {
+            return;
+        }
+
+        const state = { offset };
+        this.introRise = { bubbles, finalYs, state };
+
+        for (let index = 0; index < bubbles.length; index += 1) {
+            bubbles[index].y = finalYs[index] + offset;
+        }
+
+        this.tweens.add({
+            targets: state,
+            offset: 0,
+            duration: INTRO_BUBBLE_RISE_MS,
+            ease: INTRO_BUBBLE_RISE_EASE,
+            onUpdate: () => {
+                if (this.introEpoch !== epoch || !this.introRise) {
+                    return;
+                }
+
+                for (let index = 0; index < bubbles.length; index += 1) {
+                    const bubble = bubbles[index];
+
+                    if (bubble.active) {
+                        bubble.y = finalYs[index] + state.offset;
+                    }
+                }
+            },
+            onComplete: () => {
+                if (this.introEpoch !== epoch) {
+                    return;
+                }
+
+                this.snapIntroBubblesToFinal();
+                this.introRise = null;
+            },
+        });
+    }
+
+    /** Restores every intro bubble to its exact final Y coordinate. */
+    private snapIntroBubblesToFinal(): void {
+        const rise = this.introRise;
+
+        if (!rise) {
+            return;
+        }
+
+        for (let index = 0; index < rise.bubbles.length; index += 1) {
+            const bubble = rise.bubbles[index];
+
+            if (bubble.active) {
+                bubble.y = rise.finalYs[index];
             }
-            this.hideLevelIntro();
-        }, 1000);
+        }
     }
 
     private hideLevelIntro(): void {
         this.introEpoch += 1;
-        if (this.introTimeout !== null) {
-            window.clearTimeout(this.introTimeout);
-            this.introTimeout = null;
+        if (this.introHoldTimer) {
+            this.introHoldTimer.remove(false);
+            this.introHoldTimer = null;
         }
+
+        if (this.introPopup) {
+            this.tweens.killTweensOf(this.introPopup);
+        }
+
+        if (this.introRise) {
+            this.tweens.killTweensOf(this.introRise.state);
+        }
+
+        // Any interrupted rise still lands on the predefined cells.
+        this.snapIntroBubblesToFinal();
+        this.introRise = null;
+
         if (this.introLockHeld) {
             this.introLockHeld = false;
             releaseModalInputLock('levelIntro');
         }
+
         if (this.introPopup) {
             const popup = this.introPopup;
             this.introPopup = null;
@@ -1541,17 +1832,31 @@ export class GameScene extends Scene {
                 popup.destroy(true);
             }
         }
+
+        if (this.introBlocker) {
+            const blocker = this.introBlocker;
+            this.introBlocker = null;
+            if (blocker.active) {
+                blocker.destroy();
+            }
+        }
     }
 
     private handleShutdown(): void {
         this.extraBallsAdEpoch += 1;
+        // Targeted intro cleanup first (timer/tween handles), then a blanket
+        // timing reset so no stale callback can outlive this gameplay session.
         this.hideLevelIntro();
+        this.time.paused = false;
+        this.time.removeAllEvents();
+        this.tweens.killAll();
         this.pausePanel?.destroy();
         this.pausePanel = null;
+        this.leaveGamePanel?.destroy();
+        this.leaveGamePanel = null;
         this.settingsPanel?.destroy();
         this.settingsPanel = null;
         this.gameOverPanel?.destroy();
-        resetModalInputLock();
         this.boardScroll?.destroy();
         this.boardScroll = null;
         this.aimController?.destroy();
@@ -1561,5 +1866,7 @@ export class GameScene extends Scene {
         this.boardMaskShape?.destroy();
         this.boardMaskShape = null;
         this.destroyProjectileEffects();
+        resetModalInputLock();
+        clearTransition(this);
     }
 }

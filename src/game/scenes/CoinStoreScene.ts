@@ -4,11 +4,23 @@ import { loadProgress, addCoins, canClaimDailyCoins, claimDailyCoins, addPending
 import { grantPowerUp, loadPowerUpInventory } from '../powerups/inventory';
 import type { PowerUpInventory } from '../powerups/inventory';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
-import { fadeInScene, goToScene, goToSceneInstant } from './transitions';
+import { fadeInScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { attachRelayout, worldHeight, worldWidth } from '../layout';
-import { STORE_PRODUCTS, rollMysteryReward, type StoreCategory, type StoreProduct, type StoreReward } from '../store/catalog';
+import { hidesInGameBackButtonForViewport } from '../levelBreakpoints';
+import { STORE_PRODUCTS, rollMysteryReward, type StoreProduct, type StoreReward } from '../store/catalog';
 import { REAL_MONEY_PRODUCTS, type RealMoneyProduct } from '../store/realMoneyCatalog';
+import {
+    STORE_CARD_GAP,
+    buildStoreCardSlots,
+    nearestSlotIndex,
+    slotIndicesInBand,
+    storeColumnsForWidth,
+    storePlanContentHeight,
+    storeScrollKey,
+    type StoreCardSlot,
+    type StoreFilter,
+} from '../store/storeVirtualization';
 import { queryLocalizedPrices, requestPurchase, verifyTransaction, hasProcessedTransaction, markTransactionProcessed } from '../payments/payments';
 import { showRewardedAd } from '../../ads/rewardedAds';
 
@@ -20,7 +32,7 @@ export interface CoinStoreSceneData {
     snapshot?: import('../utils/gameplaySnapshot').GameplaySnapshot;
 }
 
-type CategoryFilter = 'all' | StoreCategory | 'real';
+type CategoryFilter = StoreFilter;
 
 const DRAG_THRESHOLD = 10;
 const GRID_TOP_WIDE = 160;
@@ -29,6 +41,41 @@ const GRID_TOP_MOBILE = 310;
 const REWARDED_AD_COINS = 20;
 /** Top edge of the single scrollable content area (below the fixed header). */
 const SCROLL_TOP = 76;
+/**
+ * Progressive card loading: at most this many cards are built per frame, and
+ * a frame's build pass stops once it has spent this long. Cards that scroll
+ * into view before their build slot arrives show a lightweight background
+ * placeholder (same geometry/gradient) instead of a blank gap.
+ */
+const MAX_CARD_BUILDS_PER_FRAME = 3;
+const CARD_BUILD_BUDGET_MS = 7;
+/**
+ * On open, the screenful of cards is built immediately, but never past these
+ * caps, so a huge desktop grid still paints its header and first row fast.
+ */
+const INITIAL_SYNC_MAX_CARDS = 6;
+const INITIAL_SYNC_BUDGET_MS = 10;
+/**
+ * Scroll offsets remembered per filter + column count so returning to the
+ * store lands where the player left it, without rebuilding cards.
+ */
+const storedStoreScroll = new Map<string, number>();
+
+/** Gold tier gradients shared by the real-money card and its placeholder. */
+const REAL_MONEY_TIER_COLORS: Record<string, [number, number]> = {
+    'real-starter': [0xffd54d, 0xf59e0b],
+    'real-basic': [0xffe38a, 0xffc928],
+    'real-bronze': [0xcd7f32, 0x8c4a12],
+    'real-silver': [0xe5e7eb, 0x9ca3af],
+    'real-gold': [0xffe38a, 0xffb300],
+    'real-platinum': [0xe8faff, 0x7dd3fc],
+    'real-diamond': [0xa5f3fc, 0x38bdf8],
+    'real-master': [0xc4b5fd, 0x7c3aed],
+    'real-ultimate': [0xf0abfc, 0xa21caf],
+    'real-legendary': [0xfde68a, 0xd97706],
+};
+
+const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 export class CoinStoreScene extends Scene {
     private locked = false;
@@ -58,6 +105,19 @@ export class CoinStoreScene extends Scene {
     private realPriceTexts = new Map<string, Phaser.GameObjects.Text>();
     private watchButtonText: Phaser.GameObjects.Text | null = null;
     private watchHit: Phaser.GameObjects.Rectangle | null = null;
+    /** Card plan for the active category; geometry only, no display objects. */
+    private cardSlots: StoreCardSlot[] = [];
+    /** Product lookups for the active category, used by lazy card builds. */
+    private realProductById = new Map<string, RealMoneyProduct>();
+    private coinProductById = new Map<string, StoreProduct>();
+    /** Cards that are fully built, keyed by plan index. */
+    private cardViews = new Map<number, Phaser.GameObjects.Container>();
+    /** Cheap backgrounds shown only while a visible card is still queued. */
+    private cardPlaceholders = new Map<number, Phaser.GameObjects.Container>();
+    /** Card indices waiting for a build slot, filled a few per frame. */
+    private pendingCardBuilds = new Set<number>();
+    /** Localized store prices remembered across lazy card builds. */
+    private localizedPrices = new Map<string, string>();
 
     constructor() {
         super('CoinStoreScene');
@@ -78,8 +138,8 @@ export class CoinStoreScene extends Scene {
         this.purchasing = false;
         this.popup = null;
         this.dropdownPanel = null;
-        this.scrollY = 0;
         installUiAudio(this);
+        gameAudio.setMusicMode('menu');
         this.createBackground();
         // Single scrollable parent at depth 5: filter dropdown, sidebar,
         // category content and every product card move together as one page.
@@ -98,9 +158,21 @@ export class CoinStoreScene extends Scene {
             this.scene.restart({ returnTo: this.returnTo, level: this.returnLevel, category: this.category, instant: this.instantOpen, snapshot: this.gameplaySnapshot });
         });
         this.events.once('shutdown', () => {
+            // Remember the reading position per filter so a return visit (or
+            // a relayout restart) lands on the same cards. Cards themselves
+            // are scene-owned, so their caches are dropped here.
+            if (this.cardSlots.length) {
+                storedStoreScroll.set(storeScrollKey(this.category, this.storeColumns), this.scrollY);
+            }
+            this.pendingCardBuilds.clear();
+            this.cardViews.clear();
+            this.cardPlaceholders.clear();
+            this.realPriceTexts.clear();
+            this.cardSlots = [];
             this.popup = null;
             this.dropdownPanel = null;
             this.scrollContainer = null;
+            this.gridContainer = null;
             this.gridMaskShape?.destroy();
             this.gridMaskShape = null;
         });
@@ -118,11 +190,7 @@ export class CoinStoreScene extends Scene {
 
     /** Responsive columns: 1 phone, 2 tablet/small desktop, 3 standard, 4 large. */
     private get storeColumns(): number {
-        const width = this.deviceWidth;
-        if (width < 560) return 1;
-        if (width < 900) return 2;
-        if (width < 1300) return 3;
-        return 4;
+        return storeColumnsForWidth(this.deviceWidth);
     }
 
     private get cardHeight(): number {
@@ -159,25 +227,27 @@ export class CoinStoreScene extends Scene {
 
     private createHeader(): void {
         const width = worldWidth();
-        const back = this.add.container(74, 52).setDepth(40);
-        const backBg = this.add.graphics();
-        backBg.fillStyle(0x020617, 0.45);
-        backBg.fillRoundedRect(-58, -21, 116, 42, 21);
-        backBg.fillStyle(0x0a3d91, 1);
-        backBg.fillRoundedRect(-58, -24, 116, 42, 21);
-        backBg.fillGradientStyle(0x4fc8f5, 0x4fc8f5, 0x168bff, 0x168bff, 1);
-        backBg.fillRoundedRect(-54, -20, 108, 34, 17);
-        backBg.fillStyle(0xffffff, 0.22);
-        backBg.fillRoundedRect(-46, -18, 92, 12, 6);
-        backBg.lineStyle(2, 0xffffff, 0.9);
-        backBg.strokeRoundedRect(-58, -24, 116, 42, 21);
-        const backText = this.add
-            .text(0, -3, '‹ BACK', { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 3 })
-            .setOrigin(0.5);
-        const backHit = this.add.circle(0, 0, 30, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
-        backHit.on('pointerdown', () => this.goBack());
-        addPressFx(this, backHit, back, { hoverScale: 1.04, pressScale: 0.95 });
-        back.add([backBg, backText, backHit]);
+        if (!hidesInGameBackButtonForViewport()) {
+            const back = this.add.container(74, 52).setDepth(40);
+            const backBg = this.add.graphics();
+            backBg.fillStyle(0x020617, 0.45);
+            backBg.fillRoundedRect(-58, -21, 116, 42, 21);
+            backBg.fillStyle(0x0a3d91, 1);
+            backBg.fillRoundedRect(-58, -24, 116, 42, 21);
+            backBg.fillGradientStyle(0x4fc8f5, 0x4fc8f5, 0x168bff, 0x168bff, 1);
+            backBg.fillRoundedRect(-54, -20, 108, 34, 17);
+            backBg.fillStyle(0xffffff, 0.22);
+            backBg.fillRoundedRect(-46, -18, 92, 12, 6);
+            backBg.lineStyle(2, 0xffffff, 0.9);
+            backBg.strokeRoundedRect(-58, -24, 116, 42, 21);
+            const backText = this.add
+                .text(0, -3, '‹ BACK', { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 3 })
+                .setOrigin(0.5);
+            const backHit = this.add.circle(0, 0, 30, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+            backHit.on('pointerdown', () => this.goBack());
+            addPressFx(this, backHit, back, { hoverScale: 1.04, pressScale: 0.95 });
+            back.add([backBg, backText, backHit]);
+        }
 
         this.add
             .text(width / 2, 52, 'COIN STORE', {
@@ -269,15 +339,17 @@ export class CoinStoreScene extends Scene {
             dailyHit.on('pointerdown', () => this.claimDaily());
             panel.add([dailyBg, this.dailyButtonText, dailyHit]);
 
-            const backBg = this.add.graphics();
-            backBg.fillStyle(0x168bff, 1);
-            backBg.fillRoundedRect(x + 20, y + 350, w - 40, 48, 14);
-            backBg.lineStyle(2, 0xffffff, 0.9);
-            backBg.strokeRoundedRect(x + 20, y + 350, w - 40, 48, 14);
-            const backLabel = this.add.text(x + w / 2, y + 374, 'BACK TO GAME', { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff' }).setOrigin(0.5);
-            const backHit = this.add.rectangle(x + w / 2, y + 374, w - 40, 48, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
-            backHit.on('pointerdown', () => this.goBack());
-            panel.add([backBg, backLabel, backHit]);
+            if (!hidesInGameBackButtonForViewport()) {
+                const backBg = this.add.graphics();
+                backBg.fillStyle(0x168bff, 1);
+                backBg.fillRoundedRect(x + 20, y + 350, w - 40, 48, 14);
+                backBg.lineStyle(2, 0xffffff, 0.9);
+                backBg.strokeRoundedRect(x + 20, y + 350, w - 40, 48, 14);
+                const backLabel = this.add.text(x + w / 2, y + 374, 'BACK TO GAME', { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff' }).setOrigin(0.5);
+                const backHit = this.add.rectangle(x + w / 2, y + 374, w - 40, 48, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+                backHit.on('pointerdown', () => this.goBack());
+                panel.add([backBg, backLabel, backHit]);
+            }
         } else {
             // Compact top banner on portrait: balance, totals, daily.
             const x = 16;
@@ -482,41 +554,186 @@ export class CoinStoreScene extends Scene {
         this.realPriceTexts.clear();
         this.watchButtonText = null;
         this.watchHit = null;
+        this.cardViews.clear();
+        this.cardPlaceholders.clear();
+        this.pendingCardBuilds.clear();
+        this.realProductById.clear();
+        this.coinProductById.clear();
+
         const realProducts = this.category === 'all' || this.category === 'real' ? REAL_MONEY_PRODUCTS : [];
         const coinProducts = this.category === 'real' ? [] : STORE_PRODUCTS.filter((p) => this.category === 'all' || p.category === this.category);
-        const cols = this.storeColumns;
-        const gap = 16;
-        const cardW = Math.floor((origin.w - gap * (cols - 1)) / cols);
-        const cardH = this.cardHeight;
-        const rewardedH = 84;
-        const topOffset = this.category === 'all' ? rewardedH + gap : 0;
-        const total = realProducts.length + coinProducts.length;
+        realProducts.forEach((product) => this.realProductById.set(product.id, product));
+        coinProducts.forEach((product) => this.coinProductById.set(product.id, product));
 
-        if (this.category === 'all') {
-            this.gridContainer?.add(this.createRewardedAdCard(origin.w / 2, rewardedH / 2, origin.w, rewardedH));
+        // Geometry-only plan: the whole catalogue is measured up front so
+        // the scroll range and mask never shift while cards stream in.
+        this.cardSlots = buildStoreCardSlots({
+            category: this.category,
+            cols: this.storeColumns,
+            gridWidth: origin.w,
+            cardHeight: this.cardHeight,
+            realProducts,
+            coinProducts,
+        });
+
+        // Restore the reading position before the first card is created.
+        const restored = storedStoreScroll.get(storeScrollKey(this.category, this.storeColumns)) ?? 0;
+        this.scrollY = restored;
+        this.applyScroll(restored, false);
+        // Build the cards already on screen right away (capped by a small
+        // time budget); anything that does not fit is queued for the next
+        // frames instead of being created in one blocking pass.
+        this.syncCardWindow(true);
+        void this.refreshRealMoneyPrices();
+    }
+
+    /**
+     * Creates queued cards a few at a time, nearest to the viewport first.
+     * Phaser calls this every frame; it does nothing once the queue is empty.
+     */
+    update(): void {
+        if (!this.pendingCardBuilds.size || !this.gridContainer) {
+            return;
         }
 
-        realProducts.forEach((pkg, index) => {
-            const col = index % cols;
-            const row = Math.floor(index / cols);
-            const x = col * (cardW + gap) + cardW / 2;
-            const y = topOffset + row * (cardH + gap) + cardH / 2;
-            this.gridContainer?.add(this.createRealMoneyCard(x, y, cardW, cardH, pkg));
-        });
+        const origin = this.gridOrigin;
+        const viewTop = SCROLL_TOP - origin.y - this.scrollY;
+        const viewBottom = worldHeight() - origin.y - this.scrollY;
+        const focus = (viewTop + viewBottom) / 2;
+        const started = nowMs();
+        let built = 0;
 
-        coinProducts.forEach((pkg, index) => {
-            const flatIndex = realProducts.length + index;
-            const col = flatIndex % cols;
-            const row = Math.floor(flatIndex / cols);
-            const x = col * (cardW + gap) + cardW / 2;
-            const y = topOffset + row * (cardH + gap) + cardH / 2;
-            this.gridContainer?.add(this.createCard(x, y, cardW, cardH, pkg));
-        });
+        while (this.pendingCardBuilds.size && built < MAX_CARD_BUILDS_PER_FRAME) {
+            const index = nearestSlotIndex(this.cardSlots, this.pendingCardBuilds, focus);
+            if (index === null) {
+                this.pendingCardBuilds.clear();
+                break;
+            }
 
-        void total;
-        this.scrollY = 0;
-        this.applyScroll(0);
-        void this.refreshRealMoneyPrices();
+            this.buildCard(index);
+            built++;
+
+            if (nowMs() - started >= CARD_BUILD_BUDGET_MS) {
+                break;
+            }
+        }
+    }
+
+    /**
+     * Recomputes which cards belong on screen. The visible band is built (or
+     * given a placeholder) immediately; one extra row above/below is queued
+     * so the next batch is ready before it scrolls in.
+     */
+    private syncCardWindow(immediate: boolean): void {
+        if (!this.gridContainer || !this.cardSlots.length) {
+            return;
+        }
+
+        const origin = this.gridOrigin;
+        const viewTop = SCROLL_TOP - origin.y - this.scrollY;
+        const viewBottom = worldHeight() - origin.y - this.scrollY;
+        const preload = this.cardHeight + STORE_CARD_GAP;
+        const visible = slotIndicesInBand(this.cardSlots, viewTop, viewBottom);
+        const buffered = slotIndicesInBand(this.cardSlots, viewTop - preload, viewBottom + preload);
+        const keep = new Set(buffered);
+
+        // Drop queued work for cards the player has scrolled far away from.
+        for (const index of [...this.pendingCardBuilds]) {
+            if (!keep.has(index)) {
+                this.pendingCardBuilds.delete(index);
+            }
+        }
+        for (const index of buffered) {
+            if (!this.cardViews.has(index)) {
+                this.pendingCardBuilds.add(index);
+            }
+        }
+
+        // Placeholders are only a bridge until the real card is built; drop
+        // any that scrolled out of the buffered band so they cannot pile up.
+        for (const [index, placeholder] of this.cardPlaceholders) {
+            if (!keep.has(index)) {
+                placeholder.destroy(true);
+                this.cardPlaceholders.delete(index);
+            }
+        }
+
+        let builtNow = 0;
+        const startedAt = nowMs();
+        for (const index of visible) {
+            if (this.cardViews.has(index)) {
+                continue;
+            }
+
+            const buildNow = immediate
+                && builtNow < INITIAL_SYNC_MAX_CARDS
+                && nowMs() - startedAt < INITIAL_SYNC_BUDGET_MS;
+
+            if (buildNow) {
+                this.buildCard(index);
+                builtNow++;
+            } else {
+                this.ensurePlaceholder(this.cardSlots[index]);
+            }
+        }
+    }
+
+    /** Lightweight card background used only until the real card is built. */
+    private ensurePlaceholder(slot: StoreCardSlot): void {
+        if (this.cardViews.has(slot.index) || this.cardPlaceholders.has(slot.index)) {
+            return;
+        }
+
+        const [top, bottom] = slot.kind === 'real'
+            ? REAL_MONEY_TIER_COLORS[slot.realProductId ?? ''] ?? [0xffe38a, 0xffb300]
+            : [0x47b9c8, 0x157a9b];
+        const card = this.add.container(slot.x, slot.y).setName(`card-placeholder-${slot.index}`);
+        const g = this.add.graphics();
+        g.fillStyle(0x020617, 0.5);
+        g.fillRoundedRect(-slot.w / 2, -slot.h / 2 + 7, slot.w, slot.h, 20);
+        g.fillGradientStyle(top, top, bottom, bottom, 1);
+        g.fillRoundedRect(-slot.w / 2, -slot.h / 2, slot.w, slot.h, 20);
+        g.lineStyle(3, 0xffffff, 0.9);
+        g.strokeRoundedRect(-slot.w / 2, -slot.h / 2, slot.w, slot.h, 20);
+        card.add(g);
+        this.gridContainer?.add(card);
+        this.cardPlaceholders.set(slot.index, card);
+    }
+
+    /** Builds one card for a plan slot, replacing its placeholder if any. */
+    private buildCard(index: number): void {
+        this.pendingCardBuilds.delete(index);
+        const slot = this.cardSlots[index];
+
+        if (!slot || this.cardViews.has(index)) {
+            return;
+        }
+
+        this.cardPlaceholders.get(index)?.destroy(true);
+        this.cardPlaceholders.delete(index);
+
+        let card: Phaser.GameObjects.Container | null = null;
+
+        if (slot.kind === 'rewarded') {
+            card = this.createRewardedAdCard(slot.x, slot.y, slot.w, slot.h);
+        } else if (slot.kind === 'real') {
+            const product = slot.realProductId ? this.realProductById.get(slot.realProductId) : undefined;
+            if (product) {
+                card = this.createRealMoneyCard(slot.x, slot.y, slot.w, slot.h, product);
+            }
+        } else {
+            const product = slot.coinProductId ? this.coinProductById.get(slot.coinProductId) : undefined;
+            if (product) {
+                card = this.createCard(slot.x, slot.y, slot.w, slot.h, product);
+            }
+        }
+
+        if (!card) {
+            return;
+        }
+
+        this.gridContainer?.add(card);
+        this.cardViews.set(index, card);
     }
 
     private async refreshRealMoneyPrices(): Promise<void> {
@@ -524,6 +741,9 @@ export class CoinStoreScene extends Scene {
         prices.forEach((price, sku) => {
             const product = REAL_MONEY_PRODUCTS.find((p) => p.sku === sku);
             if (product) {
+                // Remember the localized price so cards built later display it
+                // immediately instead of flashing the USD fallback.
+                this.localizedPrices.set(product.sku, price.displayPrice);
                 this.realPriceTexts.get(product.id)?.setText(price.displayPrice);
             }
         });
@@ -603,7 +823,7 @@ export class CoinStoreScene extends Scene {
         const outcome = await showRewardedAd();
         if (outcome === 'granted') {
             addCoins(REWARDED_AD_COINS);
-            gameAudio.playSfx('click');
+            gameAudio.playSfx('coin');
             this.refreshBalances();
             this.showPopup('Reward Earned!', `+${REWARDED_AD_COINS} Coins Added!`, true);
         } else if (outcome === 'unavailable') {
@@ -623,19 +843,7 @@ export class CoinStoreScene extends Scene {
     private createRealMoneyCard(x: number, y: number, width: number, height: number, pkg: RealMoneyProduct): Phaser.GameObjects.Container {
         const card = this.add.container(x, y);
         const g = this.add.graphics();
-        const tierColors: Record<string, [number, number]> = {
-            'real-starter': [0xffd54d, 0xf59e0b],
-            'real-basic': [0xffe38a, 0xffc928],
-            'real-bronze': [0xcd7f32, 0x8c4a12],
-            'real-silver': [0xe5e7eb, 0x9ca3af],
-            'real-gold': [0xffe38a, 0xffb300],
-            'real-platinum': [0xe8faff, 0x7dd3fc],
-            'real-diamond': [0xa5f3fc, 0x38bdf8],
-            'real-master': [0xc4b5fd, 0x7c3aed],
-            'real-ultimate': [0xf0abfc, 0xa21caf],
-            'real-legendary': [0xfde68a, 0xd97706],
-        };
-        const [top, bottom] = tierColors[pkg.id] ?? [0xffe38a, 0xffb300];
+        const [top, bottom] = REAL_MONEY_TIER_COLORS[pkg.id] ?? [0xffe38a, 0xffb300];
         g.fillStyle(0x020617, 0.5);
         g.fillRoundedRect(-width / 2, -height / 2 + 7, width, height, 20);
         g.fillGradientStyle(top, top, bottom, bottom, 1);
@@ -732,7 +940,7 @@ export class CoinStoreScene extends Scene {
         pricePill.lineStyle(2, 0xffffff, 0.95);
         pricePill.strokeRoundedRect(rightCenter - priceW / 2, priceY - 16, priceW, 26, 13);
         const priceText = this.add
-            .text(rightCenter, priceY - 2, pkg.usdPrice, { fontFamily: FONT_DISPLAY, fontSize: '14px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2 })
+            .text(rightCenter, priceY - 2, this.localizedPrices.get(pkg.sku) ?? pkg.usdPrice, { fontFamily: FONT_DISPLAY, fontSize: '14px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2 })
             .setOrigin(0.5);
         priceText.setName(`price-${pkg.id}`);
         this.realPriceTexts.set(pkg.id, priceText);
@@ -922,7 +1130,9 @@ export class CoinStoreScene extends Scene {
 
     private contentBottom(): number {
         const origin = this.gridOrigin;
-        const gridBottom = origin.y + this.gridContentHeight(origin.w);
+        // Plan-derived height: identical to the old count-based formula, but
+        // it stays correct before any card is instantiated.
+        const gridBottom = origin.y + storePlanContentHeight(this.cardSlots);
         const sidebarBottom = this.isWide ? worldHeight() - 16 : 280;
         return Math.max(gridBottom, sidebarBottom);
     }
@@ -970,26 +1180,16 @@ export class CoinStoreScene extends Scene {
         this.applyScroll(this.scrollY - deltaY * 0.55);
     }
 
-    private applyScroll(next: number): void {
+    private applyScroll(next: number, syncCards = true): void {
         const height = worldHeight() - SCROLL_TOP;
         const contentHeight = this.contentBottom() - SCROLL_TOP;
         const min = Math.min(0, height - contentHeight);
         this.scrollY = Math.max(min, Math.min(0, next));
         this.scrollContainer?.setY(this.scrollY);
-    }
 
-    private gridContentHeight(gridW: number): number {
-        const realCount = this.category === 'all' || this.category === 'real' ? REAL_MONEY_PRODUCTS.length : 0;
-        const coinProducts = this.category === 'real' ? [] : STORE_PRODUCTS.filter((p) => this.category === 'all' || p.category === this.category);
-        const total = realCount + coinProducts.length;
-        const cols = this.storeColumns;
-        const gap = 16;
-        const cardW = Math.floor((gridW - gap * (cols - 1)) / cols);
-        const cardH = this.cardHeight;
-        const rows = Math.ceil(total / cols);
-        const rewardedH = this.category === 'all' ? 84 + gap : 0;
-        void cardW;
-        return rewardedH + rows * cardH + Math.max(0, rows - 1) * gap;
+        if (syncCards) {
+            this.syncCardWindow(false);
+        }
     }
 
     private async buyRealMoney(id: string): Promise<void> {
@@ -1038,7 +1238,7 @@ export class CoinStoreScene extends Scene {
                 grantPowerUp(type as keyof PowerUpInventory, amount);
             }
         });
-        gameAudio.playSfx('click');
+        gameAudio.playSfx('purchase');
         this.refreshBalances();
         const inv = loadPowerUpInventory();
         this.showPopup(
@@ -1081,7 +1281,7 @@ export class CoinStoreScene extends Scene {
         if (appliedReward.coins && appliedReward.coins > 0) {
             addCoins(appliedReward.coins);
         }
-        gameAudio.playSfx('click');
+        gameAudio.playSfx('purchase');
         this.refreshBalances();
         if (pkg.mystery) {
             this.showMysteryPopup(pkg, appliedReward);
@@ -1107,7 +1307,7 @@ export class CoinStoreScene extends Scene {
         this.purchasing = true;
         const gained = claimDailyCoins();
         if (gained > 0) {
-            gameAudio.playSfx('click');
+            gameAudio.playSfx('coin');
             this.refreshBalances();
             this.showPopup('Daily Free Coins!', `You claimed ${gained} free coins!\nBalance: ${loadProgress().coins} Coins`, true);
         } else {
@@ -1168,16 +1368,13 @@ export class CoinStoreScene extends Scene {
         ok.setName('popup-ok');
         ok.disableInteractive();
 
-        const close = (): void => {
-            layer.destroy(true);
-            this.popup = null;
-            this.purchasing = false;
-        };
+        const close = (): void => this.dismissPopup();
         ok.on('pointerdown', close);
         dim.on('pointerdown', close);
         addPressFx(this, ok, ok, { hoverScale: 1.05, pressScale: 0.95 });
         layer.add([dim, card, title, box, body, ok]);
         this.popup = layer;
+        gameAudio.playSfx('popupOpen');
 
         this.tweens.add({ targets: box, scaleX: 1.15, scaleY: 1.15, duration: 220, yoyo: true, repeat: 3, ease: 'Sine.easeInOut' });
         this.time.delayedCall(900, () => {
@@ -1189,7 +1386,7 @@ export class CoinStoreScene extends Scene {
             body.setText(`You won:\n${reward.description}`);
             body.setFontSize('20px');
             ok.setInteractive({ useHandCursor: true });
-            gameAudio.playSfx('click');
+            gameAudio.playSfx('coin');
         });
         void pkg;
     }
@@ -1225,16 +1422,40 @@ export class CoinStoreScene extends Scene {
             .setInteractive({ useHandCursor: true });
         ok.setName('popup-ok');
 
-        const close = (): void => {
-            layer.destroy(true);
-            this.popup = null;
-            this.purchasing = false;
-        };
+        const close = (): void => this.dismissPopup();
         ok.on('pointerdown', close);
         dim.on('pointerdown', close);
         addPressFx(this, ok, ok, { hoverScale: 1.05, pressScale: 0.95 });
         layer.add([dim, card, title, body, ok]);
         this.popup = layer;
+        gameAudio.playSfx('popupOpen');
+    }
+
+    /** Closes the topmost popup only; never chains into a navigation action. */
+    private dismissPopup(): void {
+        const popup = this.popup;
+        this.popup = null;
+        this.purchasing = false;
+        if (!popup) {
+            return;
+        }
+        gameAudio.playSfx('popupClose');
+        popup.destroy(true);
+    }
+
+    public handleAndroidBack(): void {
+        if (this.popup) {
+            this.dismissPopup();
+            return;
+        }
+        if (this.dropdownPanel) {
+            this.closeCategoryDropdown();
+            return;
+        }
+        if (this.locked || this.purchasing) {
+            return;
+        }
+        this.goBack();
     }
 
     private goBack(): void {
@@ -1248,7 +1469,7 @@ export class CoinStoreScene extends Scene {
             // attempt from the hand-off snapshot — no fade, no restart.
             goToSceneInstant(this, 'GameScene', { level: this.returnLevel, instant: true, snapshot: this.gameplaySnapshot });
         } else {
-            goToScene(this, this.returnTo, undefined, 180);
+            goToSceneInstant(this, this.returnTo, { instant: true });
         }
     }
 }

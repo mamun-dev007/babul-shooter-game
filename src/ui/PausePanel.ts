@@ -39,79 +39,81 @@ export class PausePanel {
             event.stopPropagation();
         });
 
-        // Compact blue rounded popup with a soft drop shadow.
+        // Blue rounded popup with a soft drop shadow.
         const shadow = scene.add.graphics();
         shadow.fillStyle(0x07152a, 0.38);
-        shadow.fillRoundedRect(-186, -155, 380, 310, 26);
+        shadow.fillRoundedRect(-302, -300, 640, 600, 40);
 
         const panel = scene.add.graphics();
         panel.fillGradientStyle(0x4f7fe0, 0x4f7fe0, 0x49308f, 0x49308f, 1);
-        panel.fillRoundedRect(-198, -155, 380, 310, 26);
+        panel.fillRoundedRect(-320, -300, 640, 600, 40);
         panel.lineStyle(3, 0xb7dcff, 0.95);
-        panel.strokeRoundedRect(-198, -155, 380, 310, 26);
+        panel.strokeRoundedRect(-320, -300, 640, 600, 40);
         // Glossy top sheen.
         panel.fillStyle(0xffffff, 0.16);
-        panel.fillRoundedRect(-184, -141, 352, 42, 18);
+        panel.fillRoundedRect(-298, -278, 596, 64, 28);
 
         const title = scene.add
-            .text(0, -124, 'PAUSED', {
+            .text(0, -240, 'PAUSED', {
                 fontFamily: FONT_DISPLAY,
-                fontSize: '25px',
+                fontSize: '44px',
                 color: '#ffffff',
                 stroke: '#17235f',
-                strokeThickness: 5,
+                strokeThickness: 7,
                 align: 'center',
             })
             .setOrigin(0.5);
 
-        const bubbleOne = scene.add.circle(-158, -128, 8, 0x77e4ff, 0.28)
+        const bubbleOne = scene.add.circle(-272, -222, 14, 0x77e4ff, 0.28)
             .setStrokeStyle(2, 0xffffff, 0.42);
-        const bubbleTwo = scene.add.circle(158, 98, 10, 0xb58cff, 0.26)
+        const bubbleTwo = scene.add.circle(272, 170, 17, 0xb58cff, 0.26)
             .setStrokeStyle(2, 0xffffff, 0.38);
 
         this.container.add([dim, shadow, panel, bubbleOne, bubbleTwo, title]);
 
         this.menuView = scene.add.container(0, 0);
         this.menuView.add([
-            this.createButton(scene, 0, -50, 'RESUME', '▶', callbacks.onResume),
-            this.createButton(scene, 0, 0, 'RESTART LEVEL', '↻', () => {
+            this.createButton(scene, 0, -147, 'RESUME', '▶', callbacks.onResume),
+            this.createButton(scene, 0, -29, 'RESTART LEVEL', '↻', () => {
                 this.menuView.setVisible(false);
                 this.confirmView.setVisible(true);
+                gameAudio.playSfx('popupOpen');
             }),
-            this.createButton(scene, 0, 50, 'SETTINGS', '⚙', callbacks.onSettings),
-            this.createButton(scene, 0, 100, 'LEVEL MAP', 'shell', callbacks.onLevelMap),
+            this.createButton(scene, 0, 89, 'SETTINGS', '⚙', callbacks.onSettings),
+            this.createButton(scene, 0, 207, 'LEVEL MAP', 'shell', callbacks.onLevelMap),
         ]);
         this.container.add(this.menuView);
 
         this.confirmView = scene.add.container(0, 0).setVisible(false);
         this.confirmView.add([
             scene.add
-                .text(0, -56, 'RESTART THIS LEVEL?', {
+                .text(0, -108, 'RESTART THIS LEVEL?', {
                     fontFamily: FONT_DISPLAY,
-                    fontSize: '21px',
+                    fontSize: '38px',
                     color: '#ffffff',
                     stroke: '#17235f',
-                    strokeThickness: 4,
+                    strokeThickness: 6,
                     align: 'center',
                 })
                 .setOrigin(0.5),
             scene.add
-                .text(0, -22, 'Level progress will be lost.', {
+                .text(0, -42, 'Level progress will be lost.', {
                     fontFamily: FONT_DISPLAY,
-                    fontSize: '14px',
+                    fontSize: '27px',
                     color: '#dbe9ff',
                     align: 'center',
                 })
                 .setOrigin(0.5),
-            this.createButton(scene, 0, 34, 'YES, RESTART', '↻', callbacks.onRestart),
-            this.createButton(scene, 0, 110, 'CANCEL', '✕', () => {
+            this.createButton(scene, 0, 66, 'YES, RESTART', '↻', callbacks.onRestart),
+            this.createButton(scene, 0, 212, 'CANCEL', '✕', () => {
                 this.confirmView.setVisible(false);
                 this.menuView.setVisible(true);
+                gameAudio.playSfx('popupClose');
             }),
         ]);
         this.container.add(this.confirmView);
 
-        this.createCloseButton(scene, 152, -130, callbacks.onClose);
+        this.createCloseButton(scene, 261, -250, callbacks.onClose);
 
         this.container.setAlpha(0).setScale(0.86);
         const startedAt = performance.now();
@@ -125,11 +127,13 @@ export class PausePanel {
             }
         };
         this.entranceFrame = requestAnimationFrame(animateEntrance);
+        gameAudio.playSfx('popupOpen');
     }
 
     destroy(): void {
         releaseModalInputLock(PAUSE_LOCK_ID);
         cancelAnimationFrame(this.entranceFrame);
+        gameAudio.playSfx('popupClose');
         this.container.destroy(true);
     }
 
@@ -143,24 +147,24 @@ export class PausePanel {
 
         const body = scene.add.graphics();
         body.fillStyle(0x07152a, 0.32);
-        body.fillCircle(0, 2, 18);
+        body.fillCircle(0, 4, 35);
         body.fillGradientStyle(0xe8564a, 0xe8564a, 0x9c2a1e, 0x9c2a1e, 1);
-        body.fillCircle(0, 0, 17);
-        body.lineStyle(2, 0xffffff, 0.85);
-        body.strokeCircle(0, 0, 17);
+        body.fillCircle(0, 0, 33);
+        body.lineStyle(4, 0xffffff, 0.85);
+        body.strokeCircle(0, 0, 33);
         body.fillStyle(0xffffff, 0.28);
-        body.fillRoundedRect(-9, -11, 18, 10, 5);
+        body.fillRoundedRect(-18, -21, 34, 19, 9);
 
         const cross = scene.add
             .text(0, 1, '✕', {
                 fontFamily: FONT_DISPLAY,
-                fontSize: '18px',
+                fontSize: '34px',
                 color: '#ffffff',
             })
             .setOrigin(0.5);
 
         const hit = scene.add
-            .circle(0, 0, 21, 0xffffff, 0.001)
+            .circle(0, 0, 41, 0xffffff, 0.001)
             .setInteractive({ useHandCursor: true });
 
         hit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: { stopPropagation: () => void }) => {
@@ -184,20 +188,20 @@ export class PausePanel {
     ): Phaser.GameObjects.Container {
         const button = scene.add.container(x, y);
         const graphics = scene.add.graphics();
-        const width = 262;
-        const height = 44;
+        const width = 470;
+        const height = 74;
 
         // Pill shadow, glossy red gradient body, top highlight and lower rim.
         graphics.fillStyle(0x07152a, 0.3);
-        graphics.fillRoundedRect(-width / 2, -height / 2 + 5, width, height, 29);
+        graphics.fillRoundedRect(-width / 2, -height / 2 + 8, width, height, 48);
         graphics.fillGradientStyle(RED.top, RED.top, RED.bottom, RED.bottom, 1);
-        graphics.fillRoundedRect(-width / 2, -height / 2, width, height, 29);
+        graphics.fillRoundedRect(-width / 2, -height / 2, width, height, 48);
         graphics.fillStyle(RED.highlight, 0.3);
-        graphics.fillRoundedRect(-width / 2 + 12, -height / 2 + 6, width - 24, 17, 9);
+        graphics.fillRoundedRect(-width / 2 + 20, -height / 2 + 11, width - 40, 29, 16);
         graphics.fillStyle(RED.rim, 0.8);
-        graphics.fillRoundedRect(-width / 2 + 14, height / 2 - 11, width - 28, 8, 4);
-        graphics.lineStyle(2, RED.border, 0.55);
-        graphics.strokeRoundedRect(-width / 2, -height / 2, width, height, 29);
+        graphics.fillRoundedRect(-width / 2 + 24, height / 2 - 18, width - 48, 13, 7);
+        graphics.lineStyle(4, RED.border, 0.55);
+        graphics.strokeRoundedRect(-width / 2, -height / 2, width, height, 48);
 
         let iconObject: Phaser.GameObjects.GameObject;
 
@@ -206,9 +210,9 @@ export class PausePanel {
         // '▶', '↻', '⚙' and go through the text path.
         if (!isVectorIcon(icon)) {
             iconObject = scene.add
-                .text(-104, 0, icon, {
+                .text(-186, 0, icon, {
                     fontFamily: FONT_DISPLAY,
-                    fontSize: '20px',
+                    fontSize: '33px',
                     color: '#ffffff',
                 })
                 .setOrigin(0.5);
@@ -217,17 +221,17 @@ export class PausePanel {
             // the button's own red so details read on the glossy surface.
             const vector = scene.add.graphics();
             drawVectorIcon(vector, icon, 0xffffff, true, RED.bottom);
-            vector.setPosition(-104, 0);
+            vector.setPosition(-186, 0);
             iconObject = vector;
         }
 
         const text = scene.add
-            .text(10, 0, label, {
+            .text(18, 0, label, {
                 fontFamily: FONT_DISPLAY,
-                fontSize: '16px',
+                fontSize: '27px',
                 color: '#ffffff',
                 stroke: '#7d2417',
-                strokeThickness: 3,
+                strokeThickness: 5,
             })
             .setOrigin(0.5);
 

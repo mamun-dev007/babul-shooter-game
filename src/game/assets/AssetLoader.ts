@@ -8,8 +8,8 @@ export class AssetLoader {
     }
 
     preload(): void {
-        // Loading artwork
-        this.scene.load.image('loading-background', 'assets/backgrounds/loading.png');
+        // Loading artwork is loaded earlier by BootScene (so it is on screen
+        // during loading) and reused from the texture cache here.
 
         // Main menu artwork
         this.scene.load.image('bg-menu', 'assets/backgrounds/main-menu.png');
@@ -20,16 +20,13 @@ export class AssetLoader {
         // Level map artwork
         this.scene.load.image('bg-level-map', 'assets/backgrounds/level.png');
 
-        // Logo
-        this.scene.load.svg('logo-main', 'assets/logo/bubble-shooter-logo.svg', { width: 512, height: 256 });
-        
         // Bubbles
         this.scene.load.svg('bubble-red-svg', 'assets/bubbles/bubble-red.svg', { width: 64, height: 64 });
         this.scene.load.svg('bubble-blue-svg', 'assets/bubbles/bubble-blue.svg', { width: 64, height: 64 });
         this.scene.load.svg('bubble-green-svg', 'assets/bubbles/bubble-green.svg', { width: 64, height: 64 });
         this.scene.load.svg('bubble-yellow-svg', 'assets/bubbles/bubble-yellow.svg', { width: 64, height: 64 });
         this.scene.load.svg('bubble-purple-svg', 'assets/bubbles/bubble-purple.svg', { width: 64, height: 64 });
-        
+
         // Icons
         this.scene.load.svg('icon-star', 'assets/icons/icon-star-gold.svg', { width: 48, height: 48 });
         this.scene.load.svg('icon-coin', 'assets/icons/icon-coin.svg', { width: 48, height: 48 });
@@ -41,7 +38,7 @@ export class AssetLoader {
         this.scene.load.svg('icon-lock', 'assets/icons/icon-lock.svg', { width: 48, height: 48 });
         this.scene.load.svg('icon-unlock', 'assets/icons/icon-unlock.svg', { width: 48, height: 48 });
         this.scene.load.svg('icon-level-marker', 'assets/icons/icon-level-marker.svg', { width: 48, height: 56 });
-        
+
         // Power-ups
         this.scene.load.svg('powerup-bomb', 'assets/icons/powerup-bomb.svg', { width: 56, height: 56 });
         // ?v=3 cache-buster: the small plus badge on the glossy bubble was
@@ -63,7 +60,7 @@ export class AssetLoader {
         this.scene.load.image('gift-knot', 'assets/gifts/gift-knot.png');
         this.scene.load.image('gift-pod', 'assets/gifts/gift-pod.png');
         this.scene.load.image('gift-ice', 'assets/gifts/gift-ice.png');
-        
+
         // UI
         this.scene.load.svg('ui-button-primary', 'assets/ui/button-primary.svg', { width: 320, height: 86 });
         this.scene.load.svg('ui-button-play', 'assets/ui/button-play-green.svg', { width: 320, height: 86 });

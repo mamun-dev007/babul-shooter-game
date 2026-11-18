@@ -2,9 +2,11 @@ import { Scene } from 'phaser';
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { loadProgress } from '../utils/storage';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
-import { fadeInScene, goToScene } from './transitions';
+import { fadeInScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { attachRelayout, worldHeight, worldWidth } from '../layout';
+import { hidesInGameBackButtonForViewport } from '../levelBreakpoints';
+import { giftCardLayout, giftListContentHeight, type GiftCardLayout } from '../gifts/giftCardLayout';
 import { showRewardedAd } from '../../ads/rewardedAds';
 import {
     GIFT_ITEMS,
@@ -82,6 +84,7 @@ export class GiftItemsScene extends Scene {
         this.popup = null;
         this.scrollY = 0;
         installUiAudio(this);
+        gameAudio.setMusicMode('menu');
         this.createBackground();
         this.createHeader();
         this.buildList();
@@ -112,25 +115,27 @@ export class GiftItemsScene extends Scene {
 
     private createHeader(): void {
         const width = worldWidth();
-        const back = this.add.container(74, 52).setDepth(40);
-        const backBg = this.add.graphics();
-        backBg.fillStyle(0x020617, 0.45);
-        backBg.fillRoundedRect(-58, -21, 116, 42, 21);
-        backBg.fillStyle(0x0a3d91, 1);
-        backBg.fillRoundedRect(-58, -24, 116, 42, 21);
-        backBg.fillGradientStyle(0x4fc8f5, 0x4fc8f5, 0x168bff, 0x168bff, 1);
-        backBg.fillRoundedRect(-54, -20, 108, 34, 17);
-        backBg.fillStyle(0xffffff, 0.22);
-        backBg.fillRoundedRect(-46, -18, 92, 12, 6);
-        backBg.lineStyle(2, 0xffffff, 0.9);
-        backBg.strokeRoundedRect(-58, -24, 116, 42, 21);
-        const backText = this.add
-            .text(0, -3, '‹ BACK', { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 3 })
-            .setOrigin(0.5);
-        const backHit = this.add.circle(0, 0, 30, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
-        backHit.on('pointerdown', () => this.goBack());
-        addPressFx(this, backHit, back, { hoverScale: 1.04, pressScale: 0.95 });
-        back.add([backBg, backText, backHit]);
+        if (!hidesInGameBackButtonForViewport()) {
+            const back = this.add.container(74, 52).setDepth(40);
+            const backBg = this.add.graphics();
+            backBg.fillStyle(0x020617, 0.45);
+            backBg.fillRoundedRect(-58, -21, 116, 42, 21);
+            backBg.fillStyle(0x0a3d91, 1);
+            backBg.fillRoundedRect(-58, -24, 116, 42, 21);
+            backBg.fillGradientStyle(0x4fc8f5, 0x4fc8f5, 0x168bff, 0x168bff, 1);
+            backBg.fillRoundedRect(-54, -20, 108, 34, 17);
+            backBg.fillStyle(0xffffff, 0.22);
+            backBg.fillRoundedRect(-46, -18, 92, 12, 6);
+            backBg.lineStyle(2, 0xffffff, 0.9);
+            backBg.strokeRoundedRect(-58, -24, 116, 42, 21);
+            const backText = this.add
+                .text(0, -3, '‹ BACK', { fontFamily: FONT_DISPLAY, fontSize: '15px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 3 })
+                .setOrigin(0.5);
+            const backHit = this.add.circle(0, 0, 30, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+            backHit.on('pointerdown', () => this.goBack());
+            addPressFx(this, backHit, back, { hoverScale: 1.04, pressScale: 0.95 });
+            back.add([backBg, backText, backHit]);
+        }
 
         this.add
             .text(width / 2, 48, 'GIFT ITEMS', { fontFamily: FONT_DISPLAY, fontSize: '26px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 5 })
@@ -203,13 +208,14 @@ export class GiftItemsScene extends Scene {
         this.refreshHeader();
     }
 
-    private get storeColumns(): number {
+    /** Device CSS width (falls back to world width in tests/headless). */
+    private get deviceWidth(): number {
         const width = typeof window !== 'undefined' ? window.innerWidth : 0;
-        const device = Number.isFinite(width) && width > 0 ? width : worldWidth();
-        if (device < 560) return 1;
-        if (device < 900) return 2;
-        if (device < 1300) return 3;
-        return 4;
+        return Number.isFinite(width) && width > 0 ? width : worldWidth();
+    }
+
+    private get layout(): GiftCardLayout {
+        return giftCardLayout(worldWidth(), this.deviceWidth);
     }
 
     private buildList(): void {
@@ -218,10 +224,7 @@ export class GiftItemsScene extends Scene {
         this.listContainer?.destroy(true);
         this.listMaskShape?.destroy();
         const width = worldWidth();
-        const cols = this.storeColumns;
-        // Single-column mobile cards are narrower, leaving generous padding
-        // on both sides with the card centred in the available width.
-        const listW = cols === 1 ? Math.min(420, width - 48) : Math.min(820, width - 32);
+        const { cols, cardW, cardH, gap, listW, scale } = this.layout;
         const originX = width / 2 - listW / 2;
         this.listContainer = this.add.container(originX, SCROLL_TOP).setDepth(5);
         this.listMaskShape = this.make.graphics({ x: originX, y: SCROLL_TOP }, false);
@@ -229,9 +232,6 @@ export class GiftItemsScene extends Scene {
         this.listMaskShape.fillRect(0, 0, listW, worldHeight() - SCROLL_TOP - 16);
         this.listContainer.setMask(this.listMaskShape.createGeometryMask());
 
-        const gap = 16;
-        const cardW = Math.floor((listW - gap * (cols - 1)) / cols);
-        const cardH = 210;
         // Progressive rewards: auto-pay every unlocked Level gift once via
         // the existing coin/inventory systems before rendering its state.
         grantUnlockedLevelRewards(loadProgress().highestLevel);
@@ -243,13 +243,21 @@ export class GiftItemsScene extends Scene {
             const row = Math.floor(index / cols);
             const x = col * (cardW + gap) + cardW / 2;
             const y = row * (cardH + gap) + cardH / 2;
-            this.listContainer?.add(this.createGiftCard(x, y, cardW, cardH, gift, state));
+            this.listContainer?.add(this.createGiftCard(x, y, cardW, cardH, scale, gift, state));
         });
         this.scrollY = 0;
         this.listContainer.setY(SCROLL_TOP);
     }
 
-    private createGiftCard(x: number, y: number, width: number, height: number, gift: GiftItem, state = loadGiftState()): Phaser.GameObjects.Container {
+    private createGiftCard(
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        s: number,
+        gift: GiftItem,
+        state = loadGiftState()
+    ): Phaser.GameObjects.Container {
         const progress = loadProgress();
         const unlocked = isGiftUnlocked(gift, progress.highestLevel);
         const claimed = isGiftClaimed(gift, state);
@@ -265,34 +273,35 @@ export class GiftItemsScene extends Scene {
             special: [0xfb7185, 0xc2410c],
         };
         const [gradTop, gradBottom] = rarityGradient[gift.rarity] ?? [0x38bdf8, 0x1d4ed8];
+        const radius = 20 * s;
         const g = this.add.graphics();
         g.fillStyle(0x020617, 0.5);
-        g.fillRoundedRect(-width / 2, -height / 2 + 7, width, height, 20);
+        g.fillRoundedRect(-width / 2, -height / 2 + 7 * s, width, height, radius);
         g.fillGradientStyle(gradTop, gradTop, gradBottom, gradBottom, 1);
-        g.fillRoundedRect(-width / 2, -height / 2, width, height, 20);
+        g.fillRoundedRect(-width / 2, -height / 2, width, height, radius);
         g.fillStyle(0xffffff, 0.3);
-        g.fillRoundedRect(-width / 2 + 12, -height / 2 + 8, width - 24, 30, 12);
-        g.lineStyle(3, 0xffffff, 0.95);
-        g.strokeRoundedRect(-width / 2, -height / 2, width, height, 20);
-        g.lineStyle(1.5, 0xffffff, 0.45);
-        g.strokeRoundedRect(-width / 2 + 5, -height / 2 + 5, width - 10, height - 10, 16);
+        g.fillRoundedRect(-width / 2 + 12 * s, -height / 2 + 8 * s, width - 24 * s, 30 * s, 12 * s);
+        g.lineStyle(3 * s, 0xffffff, 0.95);
+        g.strokeRoundedRect(-width / 2, -height / 2, width, height, radius);
+        g.lineStyle(1.5 * s, 0xffffff, 0.45);
+        g.strokeRoundedRect(-width / 2 + 5 * s, -height / 2 + 5 * s, width - 10 * s, height - 10 * s, 16 * s);
         card.add(g);
 
         // Side-by-side card layout: artwork left, name + vertical rewards
         // right, action in a bottom strip. No text overlaps the artwork.
         // Cards are completely static — no tweens, hover scale, or press FX.
-        const imageW = Math.min(140, Math.max(72, Math.round(width * 0.36)));
-        const sidePad = 14;
-        const textX = -width / 2 + sidePad + imageW + 10;
-        const textW = width - sidePad - sidePad - imageW - 10;
+        const imageW = Math.min(Math.round(140 * s), Math.max(Math.round(72 * s), Math.round(width * 0.36)));
+        const sidePad = 14 * s;
+        const textX = -width / 2 + sidePad + imageW + 10 * s;
+        const textW = width - sidePad - sidePad - imageW - 10 * s;
         const contentTop = -height / 2;
-        const contentBottom = height / 2 - 56;
+        const contentBottom = height / 2 - 56 * s;
         const imageCx = -width / 2 + sidePad + imageW / 2;
         const imageCy = (contentTop + contentBottom) / 2;
 
-        const titleFontSize = textW < 110 ? '11px' : textW < 160 ? '12px' : '14px';
+        const titleFontSize = textW < 110 * s ? `${Math.round(11 * s)}px` : textW < 160 * s ? `${Math.round(12 * s)}px` : `${Math.round(14 * s)}px`;
         const title = this.add
-            .text(textX, contentTop + 14, gift.name, { fontFamily: FONT_DISPLAY, fontSize: titleFontSize, color: '#ffffff', stroke: '#075a8a', strokeThickness: 3, align: 'left', wordWrap: { width: Math.max(52, textW - 70) } })
+            .text(textX, contentTop + 14 * s, gift.name, { fontFamily: FONT_DISPLAY, fontSize: titleFontSize, color: '#ffffff', stroke: '#075a8a', strokeThickness: 3 * s, align: 'left', wordWrap: { width: Math.max(52 * s, textW - 70 * s) } })
             .setOrigin(0, 0);
         card.add(title);
 
@@ -300,7 +309,7 @@ export class GiftItemsScene extends Scene {
         if (gift.rarity === 'epic' || gift.rarity === 'legendary') {
             const glow = this.add.graphics();
             glow.fillStyle(rarityColor, 0.3);
-            glow.fillCircle(imageCx, imageCy, 50);
+            glow.fillCircle(imageCx, imageCy, 50 * s);
             card.add(glow);
         }
         // Extracted PNG artwork — one transparent asset per color (separate
@@ -309,7 +318,7 @@ export class GiftItemsScene extends Scene {
         if (this.textures.exists(gift.artwork)) {
             const artwork = this.add.image(0, 0, gift.artwork);
             // Contain-fit: preserve aspect ratio inside the artwork area.
-            const scale = Math.min((imageW - 8) / artwork.width, (contentBottom - (-height / 2) - 14) / artwork.height);
+            const scale = Math.min((imageW - 8 * s) / artwork.width, (contentBottom - (-height / 2) - 14 * s) / artwork.height);
             artwork.setDisplaySize(artwork.width * scale, artwork.height * scale);
             artwork.setName(`artwork-${gift.id}`);
             ill.add(artwork);
@@ -317,7 +326,7 @@ export class GiftItemsScene extends Scene {
             // Fallback only if the PNG has not loaded: keep the card visible.
             const fallback = this.add.graphics();
             fallback.fillStyle(rarityColor, 1);
-            fallback.fillRoundedRect(-28, -22, 56, 44, 8);
+            fallback.fillRoundedRect(-28 * s, -22 * s, 56 * s, 44 * s, 8 * s);
             ill.add(fallback);
         }
         if (!unlocked) {
@@ -340,7 +349,7 @@ export class GiftItemsScene extends Scene {
         powerRows.forEach(({ key, texture, label }) => {
             const amount = gift.reward.grants[key];
             if (amount) {
-                const shortLabel = key === 'colorChanger' && textW < 150 ? 'Colors' : label;
+                const shortLabel = key === 'colorChanger' && textW < 150 * s ? 'Colors' : label;
                 rewards.push({ qty: String(amount), label: shortLabel, texture: this.textures.exists(texture) ? texture : null });
             }
         });
@@ -350,9 +359,9 @@ export class GiftItemsScene extends Scene {
 
         // Centre the title + reward block vertically so it balances the
         // artwork around the card centre, with padding left on all sides.
-        const rewardGap = 21;
-        const firstRewardY = title.y + title.height + 10;
-        const blockBottom = rewards.length > 0 ? firstRewardY + (rewards.length - 1) * rewardGap + 9 : title.y + title.height;
+        const rewardGap = 21 * s;
+        const firstRewardY = title.y + title.height + 10 * s;
+        const blockBottom = rewards.length > 0 ? firstRewardY + (rewards.length - 1) * rewardGap + 9 * s : title.y + title.height;
         const blockCenter = (title.y + blockBottom) / 2;
         const shift = imageCy - blockCenter;
         title.setY(title.y + shift);
@@ -361,41 +370,41 @@ export class GiftItemsScene extends Scene {
         // Rarity badge, aligned with the centred title line, top-right.
         const badge = this.add.graphics();
         badge.fillStyle(rarityColor, 1);
-        badge.fillRoundedRect(width / 2 - 14 - 62, title.y - 2, 62, 18, 9);
-        badge.lineStyle(1.5, 0xffffff, 0.9);
-        badge.strokeRoundedRect(width / 2 - 14 - 62, title.y - 2, 62, 18, 9);
-        const badgeText = this.add.text(width / 2 - 14 - 31, title.y + 7, RARITY_LABEL[gift.rarity], { fontFamily: FONT_DISPLAY, fontSize: '8px', color: '#ffffff' }).setOrigin(0.5);
+        badge.fillRoundedRect(width / 2 - 14 * s - 62 * s, title.y - 2 * s, 62 * s, 18 * s, 9 * s);
+        badge.lineStyle(1.5 * s, 0xffffff, 0.9);
+        badge.strokeRoundedRect(width / 2 - 14 * s - 62 * s, title.y - 2 * s, 62 * s, 18 * s, 9 * s);
+        const badgeText = this.add.text(width / 2 - 14 * s - 31 * s, title.y + 7 * s, RARITY_LABEL[gift.rarity], { fontFamily: FONT_DISPLAY, fontSize: `${Math.round(8 * s)}px`, color: '#ffffff' }).setOrigin(0.5);
         card.add([badge, badgeText]);
 
         rewards.forEach((reward, index) => {
             const ry = rewardStartY + index * rewardGap;
-            if (ry > contentBottom - 10) {
+            if (ry > contentBottom - 10 * s) {
                 return;
             }
             if (reward.texture) {
-                card.add(this.add.image(textX + 9, ry, reward.texture).setDisplaySize(18, 18));
+                card.add(this.add.image(textX + 9 * s, ry, reward.texture).setDisplaySize(18 * s, 18 * s));
             } else if (reward.label === 'Coins') {
-                card.add(this.add.circle(textX + 9, ry, 8, 0xffc928, 1).setStrokeStyle(2, 0xfff1a8, 1));
-                card.add(this.add.text(textX + 9, ry, '$', { fontFamily: FONT_DISPLAY, fontSize: '8px', color: '#78350f' }).setOrigin(0.5));
+                card.add(this.add.circle(textX + 9 * s, ry, 8 * s, 0xffc928, 1).setStrokeStyle(2 * s, 0xfff1a8, 1));
+                card.add(this.add.text(textX + 9 * s, ry, '$', { fontFamily: FONT_DISPLAY, fontSize: `${Math.round(8 * s)}px`, color: '#78350f' }).setOrigin(0.5));
             } else {
-                card.add(this.add.circle(textX + 9, ry, 8, rarityColor, 1).setStrokeStyle(2, 0xffffff, 0.9));
+                card.add(this.add.circle(textX + 9 * s, ry, 8 * s, rarityColor, 1).setStrokeStyle(2 * s, 0xffffff, 0.9));
             }
-            const qtyText = this.add.text(textX + 24, ry, reward.qty, { fontFamily: FONT_DISPLAY, fontSize: '12px', color: '#fde68a', stroke: '#0f2a4a', strokeThickness: 2 }).setOrigin(0, 0.5);
+            const qtyText = this.add.text(textX + 24 * s, ry, reward.qty, { fontFamily: FONT_DISPLAY, fontSize: `${Math.round(12 * s)}px`, color: '#fde68a', stroke: '#0f2a4a', strokeThickness: 2 * s }).setOrigin(0, 0.5);
             card.add(qtyText);
-            card.add(this.add.text(textX + 24 + qtyText.width + 5, ry, reward.label, { fontFamily: FONT, fontSize: '11px', color: '#ffffff', stroke: '#0f2a4a', strokeThickness: 2, wordWrap: { width: Math.max(28, textW - qtyText.width - 30) } }).setOrigin(0, 0.5));
+            card.add(this.add.text(textX + 24 * s + qtyText.width + 5 * s, ry, reward.label, { fontFamily: FONT, fontSize: `${Math.round(11 * s)}px`, color: '#ffffff', stroke: '#0f2a4a', strokeThickness: 2 * s, wordWrap: { width: Math.max(28 * s, textW - qtyText.width - 30 * s) } }).setOrigin(0, 0.5));
         });
 
         if (!unlocked) {
-            const stripY = height / 2 - 28;
+            const stripY = height / 2 - 28 * s;
             const lock = this.add.graphics();
             lock.fillStyle(0x64748b, 1);
-            lock.fillCircle(-(width / 2) + 26, stripY, 13);
+            lock.fillCircle(-(width / 2) + 26 * s, stripY, 13 * s);
             lock.fillStyle(0xe5e7eb, 1);
-            lock.fillRect(-(width / 2) + 20, stripY - 2, 12, 9);
-            lock.lineStyle(3, 0xe5e7eb, 1);
-            lock.strokeCircle(-(width / 2) + 26, stripY - 6, 5);
+            lock.fillRect(-(width / 2) + 20 * s, stripY - 2 * s, 12 * s, 9 * s);
+            lock.lineStyle(3 * s, 0xe5e7eb, 1);
+            lock.strokeCircle(-(width / 2) + 26 * s, stripY - 6 * s, 5 * s);
             const lockText = this.add
-                .text(-(width / 2) + 46, stripY, `UNLOCK AT LEVEL ${gift.unlockLevel}`, { fontFamily: FONT_DISPLAY, fontSize: '11px', color: '#ffffff', stroke: '#334155', strokeThickness: 2, wordWrap: { width: width - 58 } })
+                .text(-(width / 2) + 46 * s, stripY, `UNLOCK AT LEVEL ${gift.unlockLevel}`, { fontFamily: FONT_DISPLAY, fontSize: `${Math.round(11 * s)}px`, color: '#ffffff', stroke: '#334155', strokeThickness: 2 * s, wordWrap: { width: width - 58 * s } })
                 .setOrigin(0, 0.5);
             lockText.setName(`locked-${gift.id}`);
             card.add([lock, lockText]);
@@ -404,7 +413,7 @@ export class GiftItemsScene extends Scene {
 
         if (claimed) {
             const done = this.add
-                .text(0, height / 2 - 28, '✓ Claimed', { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#bbf7d0', stroke: '#064e2a', strokeThickness: 2 })
+                .text(0, height / 2 - 28 * s, '✓ Claimed', { fontFamily: FONT_DISPLAY, fontSize: `${Math.round(13 * s)}px`, color: '#bbf7d0', stroke: '#064e2a', strokeThickness: 2 * s })
                 .setOrigin(0.5);
             done.setName(`claimed-${gift.id}`);
             card.add(done);
@@ -417,14 +426,14 @@ export class GiftItemsScene extends Scene {
 
         if (isAdCard && cooldownMs > 0) {
             // Ad cooldown: show a live countdown instead of WATCH AD.
-            const cdW = Math.min(160, width - 24);
-            const cdY = height / 2 - 28;
+            const cdW = Math.min(160 * s, width - 24 * s);
+            const cdY = height / 2 - 28 * s;
             const cdBg = this.add.graphics();
             cdBg.fillStyle(0x1e293b, 0.9);
-            cdBg.fillRoundedRect(-cdW / 2, cdY - 15, cdW, 30, 15);
-            cdBg.lineStyle(2, 0x94a3b8, 0.9);
-            cdBg.strokeRoundedRect(-cdW / 2, cdY - 15, cdW, 30, 15);
-            const cdText = this.add.text(0, cdY, formatGiftCountdown(cooldownMs), { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#fde68a', stroke: '#0f172a', strokeThickness: 2 }).setOrigin(0.5);
+            cdBg.fillRoundedRect(-cdW / 2, cdY - 15 * s, cdW, 30 * s, 15 * s);
+            cdBg.lineStyle(2 * s, 0x94a3b8, 0.9);
+            cdBg.strokeRoundedRect(-cdW / 2, cdY - 15 * s, cdW, 30 * s, 15 * s);
+            const cdText = this.add.text(0, cdY, formatGiftCountdown(cooldownMs), { fontFamily: FONT_DISPLAY, fontSize: `${Math.round(13 * s)}px`, color: '#fde68a', stroke: '#0f172a', strokeThickness: 2 * s }).setOrigin(0.5);
             cdText.setName(`cooldown-${gift.id}`);
             this.cooldownTexts.set(gift.id, cdText);
             card.add([cdBg, cdText]);
@@ -433,8 +442,8 @@ export class GiftItemsScene extends Scene {
 
         const buttonText = isAdCard ? 'WATCH AD' : 'UNLOCKED';
 
-        const buyW = Math.min(160, width - 24);
-        const buyY = height / 2 - 28;
+        const buyW = Math.min(160 * s, width - 24 * s);
+        const buyY = height / 2 - 28 * s;
         const buyBg = this.add.graphics();
         const btnGradient: Record<string, [number, number]> = {
             common: [0x38bdf8, 0x1d4ed8],
@@ -447,18 +456,18 @@ export class GiftItemsScene extends Scene {
         const drawBuy = (): void => {
             buyBg.clear();
             buyBg.fillStyle(0x020617, 0.45);
-            buyBg.fillRoundedRect(-buyW / 2, buyY - 15 + 3, buyW, 30, 15);
+            buyBg.fillRoundedRect(-buyW / 2, buyY - 15 * s + 3 * s, buyW, 30 * s, 15 * s);
             buyBg.fillGradientStyle(btnTop, btnTop, btnBottom, btnBottom, 1);
-            buyBg.fillRoundedRect(-buyW / 2, buyY - 15, buyW, 30, 15);
+            buyBg.fillRoundedRect(-buyW / 2, buyY - 15 * s, buyW, 30 * s, 15 * s);
             buyBg.fillStyle(0xffffff, 0.22);
-            buyBg.fillRoundedRect(-buyW / 2 + 10, buyY - 12, buyW - 20, 10, 5);
-            buyBg.lineStyle(2, 0xffffff, 0.95);
-            buyBg.strokeRoundedRect(-buyW / 2, buyY - 15, buyW, 30, 15);
+            buyBg.fillRoundedRect(-buyW / 2 + 10 * s, buyY - 12 * s, buyW - 20 * s, 10 * s, 5 * s);
+            buyBg.lineStyle(2 * s, 0xffffff, 0.95);
+            buyBg.strokeRoundedRect(-buyW / 2, buyY - 15 * s, buyW, 30 * s, 15 * s);
         };
         drawBuy();
-        const buyText = this.add.text(0, buyY, buttonText, { fontFamily: FONT_DISPLAY, fontSize: '13px', color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2 }).setOrigin(0.5);
+        const buyText = this.add.text(0, buyY, buttonText, { fontFamily: FONT_DISPLAY, fontSize: `${Math.round(13 * s)}px`, color: '#ffffff', stroke: '#7c2d12', strokeThickness: 2 * s }).setOrigin(0.5);
         buyText.setName(`claim-${gift.id}`);
-        const buyHit = this.add.rectangle(0, buyY, buyW, 30, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
+        const buyHit = this.add.rectangle(0, buyY, buyW, 30 * s, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
         buyHit.setData('claimGift', gift.id);
         buyHit.on('pointerup', () => {
             if (!this.dragMoved) {
@@ -516,7 +525,7 @@ export class GiftItemsScene extends Scene {
             return;
         }
 
-        gameAudio.playSfx('click');
+        gameAudio.playSfx('purchase');
         this.refreshHeader();
         // Static success feedback (no card animation): show the confirmation
         // popup and refresh immediately. The grant above is exactly-once.
@@ -541,22 +550,17 @@ export class GiftItemsScene extends Scene {
         body.setName('lucky-reward');
         const collect = this.add.text(cardX, cardY + 66, 'COLLECT', { fontFamily: FONT_DISPLAY, fontSize: '18px', color: '#ffffff', backgroundColor: '#22c55e', padding: { x: 30, y: 10 } }).setOrigin(0.5).setInteractive({ useHandCursor: true });
         collect.setName('lucky-collect');
-        const close = (): void => {
-            layer.destroy(true);
-            this.popup = null;
-            this.claiming = false;
-            this.buildList();
-        };
         collect.on('pointerdown', () => {
             const paid = grantGiftReward(gift, reward);
             if (paid) {
-                gameAudio.playSfx('click');
+                gameAudio.playSfx('coin');
                 this.refreshHeader();
             }
-            close();
+            this.dismissPopup();
         });
         layer.add([dim, card, title, body, collect]);
         this.popup = layer;
+        gameAudio.playSfx('popupOpen');
     }
 
     private bindScrollInput(): void {
@@ -615,9 +619,7 @@ export class GiftItemsScene extends Scene {
     }
 
     private listContentHeight(): number {
-        const cols = this.storeColumns;
-        const rows = Math.ceil(GIFT_ITEMS.length / cols);
-        return rows * 210 + Math.max(0, rows - 1) * 16;
+        return giftListContentHeight(GIFT_ITEMS.length, this.layout);
     }
 
     private showPopup(titleText: string, bodyText: string, success: boolean): void {
@@ -642,16 +644,36 @@ export class GiftItemsScene extends Scene {
         const body = this.add.text(cardX, cardY - 10, bodyText, { fontFamily: FONT, fontSize: '16px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 2, align: 'center', lineSpacing: 6 }).setOrigin(0.5);
         const ok = this.add.text(cardX, cardY + 66, 'OK', { fontFamily: FONT_DISPLAY, fontSize: '18px', color: '#ffffff', backgroundColor: '#22c55e', padding: { x: 36, y: 10 } }).setOrigin(0.5).setInteractive({ useHandCursor: true });
         ok.setName('popup-ok');
-        const close = (): void => {
-            layer.destroy(true);
-            this.popup = null;
-            this.claiming = false;
-            this.buildList();
-        };
+        const close = (): void => this.dismissPopup();
         ok.on('pointerdown', close);
         dim.on('pointerdown', close);
         layer.add([dim, card, title, body, ok]);
         this.popup = layer;
+        gameAudio.playSfx('popupOpen');
+    }
+
+    /** Closes the topmost popup only; never chains into a navigation action. */
+    private dismissPopup(): void {
+        const popup = this.popup;
+        this.popup = null;
+        if (!popup) {
+            return;
+        }
+        gameAudio.playSfx('popupClose');
+        popup.destroy(true);
+        this.claiming = false;
+        this.buildList();
+    }
+
+    public handleAndroidBack(): void {
+        if (this.popup) {
+            this.dismissPopup();
+            return;
+        }
+        if (this.locked || this.claiming) {
+            return;
+        }
+        this.goBack();
     }
 
     private goBack(): void {
@@ -661,9 +683,9 @@ export class GiftItemsScene extends Scene {
 
         this.locked = true;
         if (this.returnTo === 'GameScene') {
-            goToScene(this, this.returnTo, { level: this.returnLevel }, 180);
+            goToSceneInstant(this, this.returnTo, { level: this.returnLevel, instant: true });
         } else {
-            goToScene(this, this.returnTo, undefined, 180);
+            goToSceneInstant(this, this.returnTo, { instant: true });
         }
     }
 }

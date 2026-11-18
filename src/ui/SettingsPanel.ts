@@ -1,9 +1,15 @@
 import { FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../game/config';
 import { gameAudio } from '../game/audio/GameAudio';
 import { acquireModalInputLock, releaseModalInputLock } from '../game/input/modalInputLock';
-import { loadProgress } from '../game/utils/storage';
+import {
+    loadProgress,
+    setMasterVolume,
+    setMusicVolume,
+    setSfxVolume,
+} from '../game/utils/storage';
 import { addPressFx } from './uiFx';
 import { uiFitScale } from '../game/responsive';
+import { createVolumeSlider } from './VolumeSlider';
 
 export interface SettingsPanelOptions {
     soundEnabled: boolean;
@@ -72,7 +78,7 @@ export class SettingsPanel {
 
         container.add([dim, card, title]);
 
-        this.createToggleRow(container, -62, 'SOUND EFFECTS', options.soundEnabled, () => {
+        this.createToggleRow(container, -142, 'SOUND EFFECTS', options.soundEnabled, () => {
             options.onSoundToggle();
             const enabled = loadProgress().sound;
             if (enabled) {
@@ -84,7 +90,7 @@ export class SettingsPanel {
         if (options.onMusicToggle) {
             this.createToggleRow(
                 container,
-                18,
+                -82,
                 'MUSIC',
                 options.musicEnabled ?? loadProgress().music,
                 () => {
@@ -93,6 +99,32 @@ export class SettingsPanel {
                 }
             );
         }
+
+        const progress = loadProgress();
+        createVolumeSlider(scene, container, {
+            x: 0,
+            y: -16,
+            width: 348,
+            label: 'MASTER VOLUME',
+            value: progress.masterVolume ?? 1,
+            onChange: setMasterVolume,
+        });
+        createVolumeSlider(scene, container, {
+            x: 0,
+            y: 40,
+            width: 348,
+            label: 'MUSIC VOLUME',
+            value: progress.musicVolume ?? 0.8,
+            onChange: setMusicVolume,
+        });
+        createVolumeSlider(scene, container, {
+            x: 0,
+            y: 96,
+            width: 348,
+            label: 'SFX VOLUME',
+            value: progress.sfxVolume ?? 0.9,
+            onChange: setSfxVolume,
+        });
 
         const back = scene.add.container(0, 180);
         const backBg = scene.add.graphics();
@@ -125,6 +157,7 @@ export class SettingsPanel {
         // The game scene pauses all tweens while the settings popup is open.
         // Keep this popup immediately visible in that paused state.
         container.setAlpha(1).setScale(1);
+        gameAudio.playSfx('popupOpen');
     }
 
     hide(): void {
@@ -135,6 +168,7 @@ export class SettingsPanel {
             return;
         }
 
+        gameAudio.playSfx('popupClose');
         this.container = null;
         this.scene.tweens.killTweensOf(this.tracked);
         this.tracked = [];

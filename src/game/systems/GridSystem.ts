@@ -334,12 +334,13 @@ export class GridSystem {
         return cluster;
     }
 
-    floatingBubbles(): Bubble[] {
+    floatingBubbles(excludedCells: readonly Cell[] = []): Bubble[] {
+        const excluded = new Set(excludedCells.map((cell) => this.cellKey(cell.row, cell.col)));
         const anchored = new Set<string>();
         const queue: Cell[] = [];
 
         for (let col = 0; col < GRID_COLS; col++) {
-            if (this.cells[0][col]) {
+            if (this.cells[0][col] && !excluded.has(this.cellKey(0, col))) {
                 queue.push({ row: 0, col });
             }
         }
@@ -353,7 +354,11 @@ export class GridSystem {
 
             const key = this.cellKey(current.row, current.col);
 
-            if (anchored.has(key) || !this.bubbleAt(current.row, current.col)) {
+            if (
+                anchored.has(key) ||
+                excluded.has(key) ||
+                !this.bubbleAt(current.row, current.col)
+            ) {
                 continue;
             }
 
@@ -366,9 +371,10 @@ export class GridSystem {
             }
         }
 
-        return this.getBubbles().filter(
-            (bubble) => !anchored.has(this.cellKey(bubble.row, bubble.col))
-        );
+        return this.getBubbles().filter((bubble) => {
+            const key = this.cellKey(bubble.row, bubble.col);
+            return !excluded.has(key) && !anchored.has(key);
+        });
     }
 
     presentColors(): BubbleColorName[] {

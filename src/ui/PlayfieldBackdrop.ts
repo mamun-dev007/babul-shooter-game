@@ -33,8 +33,8 @@ export class PlayfieldBackdrop {
         mountains.lineTo(294, 490);
         mountains.lineTo(366, 548);
         mountains.lineTo(442, 482);
-        mountains.lineTo(540, 557);
-        mountains.lineTo(540, GAME_HEIGHT);
+        mountains.lineTo(GAME_WIDTH, 557);
+        mountains.lineTo(GAME_WIDTH, GAME_HEIGHT);
         mountains.lineTo(0, GAME_HEIGHT);
         mountains.closePath();
         mountains.fillPath();
@@ -49,8 +49,8 @@ export class PlayfieldBackdrop {
         mountains.lineTo(347, 532);
         mountains.lineTo(426, 584);
         mountains.lineTo(497, 528);
-        mountains.lineTo(540, 564);
-        mountains.lineTo(540, GAME_HEIGHT);
+        mountains.lineTo(GAME_WIDTH, 564);
+        mountains.lineTo(GAME_WIDTH, GAME_HEIGHT);
         mountains.lineTo(0, GAME_HEIGHT);
         mountains.closePath();
         mountains.fillPath();
@@ -58,10 +58,10 @@ export class PlayfieldBackdrop {
         const farHills = scene.add.graphics().setDepth(-15);
         farHills.fillStyle(0x4d9b8e, 0.68);
         farHills.fillEllipse(76, 655, 290, 190);
-        farHills.fillEllipse(490, 657, 330, 210);
+        farHills.fillEllipse(GAME_WIDTH - 50, 657, 330, 210);
         farHills.fillStyle(0x328c7e, 0.72);
         farHills.fillEllipse(38, 744, 310, 260);
-        farHills.fillEllipse(520, 758, 350, 280);
+        farHills.fillEllipse(GAME_WIDTH - 20, 758, 350, 280);
 
         this.drawRiver(scene);
         this.drawForest(scene);
@@ -70,27 +70,28 @@ export class PlayfieldBackdrop {
 
     private drawRiver(scene: Phaser.Scene): void {
         const river = scene.add.graphics().setDepth(-13);
+        const riverCenter = GAME_WIDTH / 2;
         const left: Array<[number, number]> = [
-            [230, 538],
-            [222, 582],
-            [254, 627],
-            [281, 674],
-            [278, 719],
-            [242, 767],
-            [235, 826],
-            [250, 878],
-            [222, GAME_HEIGHT],
+            [riverCenter - 40, 538],
+            [riverCenter - 48, 582],
+            [riverCenter - 16, 627],
+            [riverCenter + 11, 674],
+            [riverCenter + 8, 719],
+            [riverCenter - 28, 767],
+            [riverCenter - 35, 826],
+            [riverCenter - 20, 878],
+            [riverCenter - 48, GAME_HEIGHT],
         ];
         const right: Array<[number, number]> = [
-            [306, 538],
-            [296, 580],
-            [330, 625],
-            [355, 674],
-            [348, 719],
-            [310, 767],
-            [305, 826],
-            [321, 878],
-            [296, GAME_HEIGHT],
+            [riverCenter + 36, 538],
+            [riverCenter + 26, 580],
+            [riverCenter + 60, 625],
+            [riverCenter + 85, 674],
+            [riverCenter + 78, 719],
+            [riverCenter + 40, 767],
+            [riverCenter + 35, 826],
+            [riverCenter + 51, 878],
+            [riverCenter + 26, GAME_HEIGHT],
         ];
 
         river.fillStyle(0x75d8df, 0.74);
@@ -112,9 +113,9 @@ export class PlayfieldBackdrop {
         });
         river.strokePath();
         river.lineStyle(2, 0xffffff, 0.34);
-        river.lineBetween(261, 597, 293, 633);
-        river.lineBetween(295, 688, 276, 724);
-        river.lineBetween(274, 791, 265, 821);
+        river.lineBetween(riverCenter - 9, 597, riverCenter + 23, 633);
+        river.lineBetween(riverCenter + 25, 688, riverCenter + 6, 724);
+        river.lineBetween(riverCenter + 4, 791, riverCenter - 5, 821);
     }
 
     private drawForest(scene: Phaser.Scene): void {
@@ -152,7 +153,7 @@ export class PlayfieldBackdrop {
 
         clouds.fillStyle(0xffffff, 0.13);
         clouds.fillEllipse(80, 352, 155, 34);
-        clouds.fillEllipse(432, 392, 174, 42);
+        clouds.fillEllipse(GAME_WIDTH - 108, 392, 174, 42);
         clouds.fillEllipse(170, 446, 130, 26);
 
         const cloud = scene.add.ellipse(80, 352, 155, 34, 0xffffff, 0.1).setDepth(-17);

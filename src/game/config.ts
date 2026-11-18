@@ -1,9 +1,10 @@
-export let GAME_WIDTH: number = 540;
+export let GAME_WIDTH: number = 700;
 export let GAME_HEIGHT: number = 960;
 
-export const BUBBLE_RADIUS = 19;
+/** ~34% larger than the original 19px radius while keeping 13-column formations. */
+export const BUBBLE_RADIUS = 25.5;
 export const BUBBLE_DIAMETER = BUBBLE_RADIUS * 2;
-/** 13 columns: the board spans almost the full width with ~13px side padding. */
+/** 13 columns: the board spans almost the full width with balanced side padding. */
 export const GRID_COLS = 13;
 /** Tall enough for the largest progression board (1500+ bubbles); the viewport scrolls. */
 export const GRID_ROWS = 150;
@@ -23,8 +24,9 @@ export const BOARD_VIEW_TOP = GRID_TOP;
 /** Board's visible floor sits above the shooter + bottom controls stack. */
 export let BOARD_VIEW_BOTTOM = GAME_HEIGHT - 170;
 export let DANGER_Y = BOARD_VIEW_BOTTOM - 80;
-export let SHOOTER_Y = GAME_HEIGHT - 114;
-export const LAUNCH_SPEED = 1200;
+export let SHOOTER_Y = GAME_HEIGHT - 162;
+/** World pixels per second. Tuned for a fast, immediate shot on every device. */
+export const LAUNCH_SPEED = 2600;
 export const MAX_AIM_ANGLE = 1.36;
 /** HUD's vertical budget — mirrors the board ceiling. */
 export const HUD_HEIGHT = GRID_TOP;
@@ -53,7 +55,7 @@ export const setGameViewport = (width: number, height: number): void => {
     WALL_RIGHT = GAME_WIDTH - GRID_LEFT - BUBBLE_RADIUS;
     BOARD_VIEW_BOTTOM = GAME_HEIGHT - 170;
     DANGER_Y = BOARD_VIEW_BOTTOM - 80;
-    SHOOTER_Y = GAME_HEIGHT - 114;
+    SHOOTER_Y = GAME_HEIGHT - 162;
 };
 
 const ORIGINAL_BUBBLE_TEXTURES: Partial<Record<BubbleColorName, string>> = {
