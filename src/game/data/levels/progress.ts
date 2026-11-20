@@ -41,6 +41,32 @@ export function resolveLevelStars(
     return Math.max(0, Math.min(3, Math.floor(progress.stars?.[index] ?? 0)));
 }
 
+/** Unique levels actually completed - replays never increase this count. */
+export function completedLevelCount(progress: LevelProgressSnapshot): number {
+    const indices = new Set<number>(progress.completedLevels ?? []);
+
+    Object.entries(progress.stars ?? {}).forEach(([key, stars]) => {
+        const index = Number(key);
+        if (Number.isFinite(index) && index >= 0 && stars > 0) {
+            indices.add(Math.floor(index));
+        }
+    });
+
+    return indices.size;
+}
+
+/** Number of unique completed levels required before the Starter button opens. */
+export const STARTER_UNLOCK_LEVEL_COUNT = 20;
+export const STARTER_UNLOCK_TEXT = 'Unlock 20 Levels';
+
+/**
+ * Starter is derived from persisted completion data, never from merely
+ * unlocked/visited levels, so it stays locked until 20 levels are cleared and
+ * stays unlocked across scene changes and app restarts.
+ */
+export const isStarterUnlocked = (progress: LevelProgressSnapshot): boolean =>
+    completedLevelCount(progress) >= STARTER_UNLOCK_LEVEL_COUNT;
+
 /** First unlocked, unfinished level, otherwise the furthest unlocked level. */
 export function suggestedLevelIndex(totalLevels: number, progress: LevelProgressSnapshot): number {
     if (totalLevels <= 0) {

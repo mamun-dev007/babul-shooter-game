@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import { clearPointerSuppression, isPointerReleaseSuppressed, suppressPointerRelease } from '../input/modalInputLock';
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { loadProgress, addCoins, canClaimDailyCoins, claimDailyCoins, addPendingBonusShots, DAILY_FREE_COINS } from '../utils/storage';
 import { grantPowerUp, loadPowerUpInventory } from '../powerups/inventory';
@@ -21,7 +22,14 @@ import {
     type StoreCardSlot,
     type StoreFilter,
 } from '../store/storeVirtualization';
-import { queryLocalizedPrices, requestPurchase, verifyTransaction, hasProcessedTransaction, markTransactionProcessed } from '../payments/payments';
+import {
+    queryLocalizedPrices,
+    requestPurchase,
+    verifyTransaction,
+    hasProcessedTransaction,
+    markTransactionProcessed,
+    finalizePurchase,
+} from '../payments/payments';
 import { showRewardedAd } from '../../ads/rewardedAds';
 
 export interface CoinStoreSceneData {
@@ -802,7 +810,8 @@ export class CoinStoreScene extends Scene {
         this.watchHit.setData('watchAd', true);
         this.watchHit.on('pointerover', () => drawWatch(true));
         this.watchHit.on('pointerout', () => drawWatch(false));
-        this.watchHit.on('pointerup', () => {
+        this.watchHit.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+            if (isPointerReleaseSuppressed(pointer.id)) return;
             if (!this.dragMoved) {
                 void this.watchRewardedAd();
             }
@@ -966,7 +975,8 @@ export class CoinStoreScene extends Scene {
         buyHit.setData('buyRealMoney', pkg.id);
         buyHit.on('pointerover', () => drawBuy(true));
         buyHit.on('pointerout', () => drawBuy(false));
-        buyHit.on('pointerup', () => {
+        buyHit.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+            if (isPointerReleaseSuppressed(pointer.id)) return;
             if (!this.dragMoved) {
                 void this.buyRealMoney(pkg.id);
             }
@@ -1065,7 +1075,8 @@ export class CoinStoreScene extends Scene {
         buyHit.setData('buyPackage', pkg.id);
         buyHit.on('pointerover', () => drawBuy(true));
         buyHit.on('pointerout', () => drawBuy(false));
-        buyHit.on('pointerup', () => {
+        buyHit.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+            if (isPointerReleaseSuppressed(pointer.id)) return;
             if (!this.dragMoved) {
                 this.buyPackage(pkg.id);
             }
@@ -1116,6 +1127,8 @@ export class CoinStoreScene extends Scene {
     }
 
     private bindScrollInput(): void {
+        this.input.on('pointerup', this.onAnyPointerUp, this);
+        this.input.on('pointerupoutside', this.onAnyPointerUp, this);
         this.input.on('pointerdown', this.onScrollDown, this);
         this.input.on('pointermove', this.onScrollMove, this);
         this.input.on('pointerup', this.onScrollUp, this);
@@ -1135,6 +1148,10 @@ export class CoinStoreScene extends Scene {
         const gridBottom = origin.y + storePlanContentHeight(this.cardSlots);
         const sidebarBottom = this.isWide ? worldHeight() - 16 : 280;
         return Math.max(gridBottom, sidebarBottom);
+    }
+
+    private onAnyPointerUp(pointer: Phaser.Input.Pointer): void {
+        clearPointerSuppression(pointer.id);
     }
 
     private onScrollDown(pointer: Phaser.Input.Pointer): void {
@@ -1214,6 +1231,11 @@ export class CoinStoreScene extends Scene {
             return;
         }
 
+        if (outcome.status === 'pending') {
+            this.showPopup('Payment Pending', outcome.reason ?? 'The payment is still pending. No rewards were granted.', false);
+            return;
+        }
+
         if (outcome.status !== 'granted') {
             this.showPopup('Payment Failed', outcome.reason ?? 'The purchase could not be completed. No charge was made.', false);
             return;
@@ -1238,6 +1260,7 @@ export class CoinStoreScene extends Scene {
                 grantPowerUp(type as keyof PowerUpInventory, amount);
             }
         });
+        void finalizePurchase(outcome.transactionId, outcome.receipt);
         gameAudio.playSfx('purchase');
         this.refreshBalances();
         const inv = loadPowerUpInventory();
@@ -1368,7 +1391,10 @@ export class CoinStoreScene extends Scene {
         ok.setName('popup-ok');
         ok.disableInteractive();
 
-        const close = (): void => this.dismissPopup();
+        const close = (pointer: Phaser.Input.Pointer): void => {
+            suppressPointerRelease(pointer.id);
+            this.dismissPopup();
+        };
         ok.on('pointerdown', close);
         dim.on('pointerdown', close);
         addPressFx(this, ok, ok, { hoverScale: 1.05, pressScale: 0.95 });
@@ -1422,7 +1448,10 @@ export class CoinStoreScene extends Scene {
             .setInteractive({ useHandCursor: true });
         ok.setName('popup-ok');
 
-        const close = (): void => this.dismissPopup();
+        const close = (pointer: Phaser.Input.Pointer): void => {
+            suppressPointerRelease(pointer.id);
+            this.dismissPopup();
+        };
         ok.on('pointerdown', close);
         dim.on('pointerdown', close);
         addPressFx(this, ok, ok, { hoverScale: 1.05, pressScale: 0.95 });

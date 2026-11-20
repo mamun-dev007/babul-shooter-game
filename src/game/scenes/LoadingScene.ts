@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import { gameAudio } from '../audio/GameAudio';
 import { AssetLoader } from '../assets/AssetLoader';
 import { syncBootSplashBarToCanvas, updateBootSplashBarProgress } from '../bootSplashBar';
 import { attachRelayout, loadingBarGeometry, worldHeight, worldWidth } from '../layout';
@@ -74,6 +75,7 @@ export class LoadingScene extends Scene {
         // and the bar this scene is about to render sit pixel-identical —
         // the hand-off (splash removal) becomes invisible.
         syncBootSplashBarToCanvas(this.game.canvas);
+        gameAudio.preload();
         new AssetLoader(this).preload();
     }
 

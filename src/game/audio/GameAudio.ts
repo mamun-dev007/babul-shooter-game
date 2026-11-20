@@ -1,4 +1,10 @@
 import { loadProgress } from '../utils/storage';
+import {
+    buildMusicScore,
+    MUSIC_TRACKS,
+    type ScoreEvent,
+    type ScoreTrack,
+} from './musicScore';
 
 export type SfxName =
     | 'shoot'
@@ -24,13 +30,14 @@ export type SfxName =
     | 'popupClose'
     | 'purchase';
 
-export type MusicTrack = 'menu' | 'gameplay';
+export type MusicTrack = ScoreTrack;
 export type MusicMode = MusicTrack | 'none';
 
 const MUSIC_LEVEL = 0.42;
 const MUSIC_CROSSFADE = 0.9;
 const MUSIC_STOP_FADE = 0.35;
-const MAX_ACTIVE_EMITTERS = 12;
+const MUSIC_SAMPLE_RATE = 44100;
+const MAX_ACTIVE_EMITTERS = 16;
 
 const midiToHz = (midi: number): number => 440 * Math.pow(2, (midi - 69) / 12);
 
@@ -41,8 +48,8 @@ const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
  *
  * Every sound is synthesised from oscillators and noise at runtime, so there
  * are no audio downloads, no sample licences and no large binaries in the
- * Android bundle. Music is rendered once per track into a short mono buffer
- * and then played through a looping source.
+ * Android bundle. Music is rendered once per track into a seamless stereo
+ * buffer and then played through a looping source.
  */
 class GameAudio {
     private context: AudioContext | null = null;
@@ -59,11 +66,18 @@ class GameAudio {
     private sfxVolume = 0.9;
 
     private readonly musicBuffers = new Map<MusicTrack, AudioBuffer>();
+    private readonly musicRenderQueue: MusicTrack[] = [];
+    private readonly fadingMusicSources = new Set<{
+        source: AudioBufferSourceNode;
+        gain: GainNode;
+    }>();
     private musicMode: MusicMode = 'menu';
     private musicSource: AudioBufferSourceNode | null = null;
     private musicSourceGain: GainNode | null = null;
     private musicSourceMode: MusicTrack | null = null;
     private musicRendering: MusicTrack | null = null;
+    private musicDraining = false;
+    private preloadRequested = false;
     private musicUnsupported = false;
     private activeEmitters = 0;
 
@@ -123,7 +137,17 @@ class GameAudio {
         }
     }
 
+    preload(): void {
+        if (typeof window === 'undefined' || this.preloadRequested) {
+            return;
+        }
+
+        this.preloadRequested = true;
+        MUSIC_TRACKS.forEach((track) => this.requestMusicRender(track));
+    }
+
     unlock(): void {
+        this.preload();
         this.ensureContext();
 
         if (!this.context) {
@@ -334,118 +358,131 @@ class GameAudio {
     private scheduleSfx(name: SfxName, when: number): void {
         switch (name) {
             case 'shoot':
-                this.tone('triangle', 760, 300, 0.12, 0.12, when, 0.004);
-                this.noise(0.05, 0.03, 1100, when, 'bandpass');
+                this.tone('triangle', 740 * (0.96 + Math.random() * 0.08), 330, 0.11, 0.1, when, 0.003);
+                this.tone('sine', 1480, 760, 0.06, 0.032, when, 0.002);
+                this.noise(0.035, 0.026, 1600, when, 'bandpass');
                 break;
             case 'fireLaunch':
-                this.tone('sawtooth', 340, 110, 0.2, 0.055, when, 0.008);
-                this.noise(0.18, 0.05, 760, when, 'bandpass');
-                this.tone('sine', 900, 1500, 0.12, 0.03, when + 0.02, 0.004);
+                this.tone('triangle', 320, 120, 0.2, 0.05, when, 0.006);
+                this.tone('sine', 150, 70, 0.16, 0.045, when, 0.004);
+                this.noise(0.16, 0.045, 900, when, 'bandpass');
+                this.noise(0.07, 0.026, 2200, when + 0.03, 'highpass');
                 break;
             case 'bombLaunch':
-                this.tone('sine', 160, 70, 0.16, 0.09, when, 0.006);
-                this.noise(0.1, 0.03, 520, when, 'lowpass');
+                this.tone('sine', 150, 62, 0.18, 0.085, when, 0.006);
+                this.tone('triangle', 300, 130, 0.12, 0.032, when, 0.004);
+                this.noise(0.1, 0.035, 520, when, 'lowpass');
                 break;
             case 'bounce':
-                this.tone('sine', 230, 150, 0.065, 0.1, when, 0.004);
-                this.noise(0.025, 0.022, 1500, when, 'highpass');
+                this.tone('sine', 260, 165, 0.07, 0.085, when, 0.003);
+                this.tone('triangle', 520, 330, 0.04, 0.022, when, 0.002);
+                this.noise(0.02, 0.018, 1600, when, 'highpass');
                 break;
             case 'collide':
-                this.tone('sine', 330, 190, 0.06, 0.065, when, 0.003);
-                this.noise(0.028, 0.02, 950, when, 'bandpass');
+                this.tone('sine', 350, 210, 0.065, 0.06, when, 0.003);
+                this.tone('triangle', 700, 420, 0.035, 0.018, when, 0.002);
+                this.noise(0.024, 0.018, 1100, when, 'bandpass');
                 break;
             case 'match':
-                [659.25, 987.77].forEach((frequency, index) => {
-                    this.tone('triangle', frequency, frequency, 0.16, 0.045, when + index * 0.055, 0.004);
-                });
+                this.bell(when, 783.99, 0.042, 0.19);
+                this.bell(when + 0.06, 1046.5, 0.038, 0.24);
+                this.noise(0.03, 0.016, 2200, when, 'highpass');
                 break;
             case 'pop':
                 this.schedulePop(when, 1, 1);
                 break;
             case 'click':
-                this.tone('square', 760, 620, 0.04, 0.05, when, 0.002);
+                this.tone('sine', 880, 660, 0.035, 0.045, when, 0.002);
+                this.tone('triangle', 1760, 1320, 0.02, 0.012, when, 0.001);
                 break;
             case 'swap':
-                this.tone('sine', 520, 700, 0.07, 0.05, when, 0.003);
+                this.tone('sine', 520, 720, 0.075, 0.048, when, 0.003);
+                this.tone('triangle', 1040, 1440, 0.045, 0.016, when, 0.002);
                 break;
             case 'colorSwitch':
                 [523.25, 659.25, 783.99].forEach((frequency, index) => {
-                    this.tone('sine', frequency, frequency, 0.1, 0.04, when + index * 0.042, 0.003);
+                    this.bell(when + index * 0.045, frequency, 0.032, 0.17);
                 });
                 break;
             case 'powerup':
-                [392, 523.25, 659.25].forEach((frequency, index) => {
-                    this.tone('triangle', frequency, frequency, 0.13, 0.045, when + index * 0.05, 0.004);
+                [392, 523.25, 659.25, 783.99].forEach((frequency, index) => {
+                    this.tone('triangle', frequency, frequency * 1.01, 0.15, 0.04, when + index * 0.05, 0.006);
+                    this.tone('sine', frequency * 2, frequency * 2, 0.09, 0.012, when + index * 0.05, 0.004);
                 });
                 break;
             case 'bomb':
-                this.tone('sine', 120, 38, 0.4, 0.12, when, 0.006);
-                this.noise(0.32, 0.08, 420, when, 'lowpass');
+                this.tone('sine', 120, 38, 0.42, 0.12, when, 0.006);
+                this.tone('triangle', 180, 62, 0.28, 0.045, when, 0.005);
+                this.noise(0.3, 0.075, 420, when, 'lowpass');
+                this.noise(0.12, 0.028, 1500, when + 0.015, 'bandpass');
                 break;
             case 'fire':
-                this.tone('sawtooth', 280, 90, 0.22, 0.05, when, 0.005);
-                this.noise(0.24, 0.06, 1200, when, 'bandpass');
+                this.tone('triangle', 300, 95, 0.24, 0.048, when, 0.005);
+                this.tone('sine', 150, 60, 0.18, 0.04, when, 0.004);
+                this.noise(0.22, 0.055, 1200, when, 'bandpass');
+                this.noise(0.09, 0.02, 2600, when + 0.02, 'highpass');
                 break;
             case 'lightning':
-                this.tone('sawtooth', 1600, 320, 0.12, 0.05, when, 0.002);
-                this.noise(0.08, 0.05, 2600, when, 'highpass');
+                this.tone('sine', 1500, 340, 0.13, 0.05, when, 0.002);
+                this.tone('triangle', 3000, 680, 0.07, 0.018, when, 0.001);
+                this.noise(0.09, 0.045, 2400, when, 'highpass');
                 break;
             case 'star':
                 this.chime(when, 0.06);
                 break;
             case 'coin':
-                this.tone('sine', 1318.5, 1318.5, 0.09, 0.05, when, 0.003);
-                this.tone('sine', 1760, 1760, 0.14, 0.04, when + 0.04, 0.003);
+                this.bell(when, 1318.5, 0.05, 0.12);
+                this.bell(when + 0.045, 1760, 0.042, 0.18);
                 break;
             case 'win':
                 [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((frequency, index) => {
-                    this.tone(
-                        'triangle',
-                        frequency,
-                        frequency,
-                        0.42,
-                        0.07,
-                        when + index * 0.11,
-                        0.012
-                    );
+                    this.tone('triangle', frequency, frequency, 0.34, 0.055, when + index * 0.095, 0.008);
+                    this.tone('sine', frequency * 2, frequency * 2, 0.16, 0.013, when + index * 0.095, 0.004);
                 });
-                this.tone('sine', 261.63, 261.63, 0.9, 0.04, when, 0.08);
+                this.tone('sine', 261.63, 261.63, 0.85, 0.04, when, 0.07);
                 break;
             case 'lose':
-                this.tone('sawtooth', 260, 92, 0.5, 0.04, when, 0.02);
-                this.tone('sine', 180, 72, 0.55, 0.065, when + 0.04, 0.02);
+                this.tone('triangle', 260, 92, 0.5, 0.042, when, 0.016);
+                this.tone('sine', 180, 72, 0.55, 0.06, when + 0.04, 0.018);
                 break;
             case 'drop':
-                this.tone('sine', 138, 74, 0.2, 0.12, when, 0.006);
-                this.noise(0.07, 0.03, 360, when, 'lowpass');
+                this.tone('sine', 138, 74, 0.2, 0.1, when, 0.005);
+                this.tone('triangle', 276, 148, 0.1, 0.024, when, 0.003);
+                this.noise(0.07, 0.028, 360, when, 'lowpass');
                 break;
             case 'popupOpen':
-                this.noise(0.12, 0.024, 720, when, 'bandpass');
-                this.tone('sine', 300, 520, 0.14, 0.028, when, 0.008);
+                this.noise(0.1, 0.02, 800, when, 'bandpass');
+                this.tone('sine', 320, 540, 0.14, 0.026, when, 0.008);
                 break;
             case 'popupClose':
-                this.noise(0.1, 0.02, 600, when, 'bandpass');
-                this.tone('sine', 460, 280, 0.12, 0.024, when, 0.006);
+                this.noise(0.09, 0.018, 640, when, 'bandpass');
+                this.tone('sine', 480, 290, 0.12, 0.022, when, 0.006);
                 break;
             case 'purchase':
                 [659.25, 880, 1174.66].forEach((frequency, index) => {
-                    this.tone('triangle', frequency, frequency, 0.22, 0.045, when + index * 0.06, 0.004);
+                    this.bell(when + index * 0.065, frequency, 0.038, 0.24);
                 });
-                this.chime(when + 0.2, 0.026);
+                this.chime(when + 0.2, 0.024);
                 break;
         }
     }
 
     private schedulePop(when: number, pitch: number, volume: number): void {
-        this.tone('sine', 620 * pitch, 210 * pitch, 0.095, 0.11 * volume, when, 0.003);
-        this.tone('triangle', 1180 * pitch, 480 * pitch, 0.05, 0.04 * volume, when, 0.002);
-        this.noise(0.038, 0.04 * volume, 1400, when, 'bandpass');
+        const wobble = 0.94 + Math.random() * 0.12;
+        this.tone('sine', 680 * pitch * wobble, 240 * pitch * wobble, 0.1, 0.1 * volume, when, 0.0025);
+        this.tone('triangle', 1240 * pitch * wobble, 520 * pitch * wobble, 0.055, 0.034 * volume, when, 0.002);
+        this.noise(0.032, 0.034 * volume, 1700, when, 'bandpass');
+    }
+
+    private bell(when: number, frequency: number, volume: number, duration: number): void {
+        this.tone('sine', frequency, frequency, duration, volume, when, 0.004);
+        this.tone('sine', frequency * 2.01, frequency * 2.01, duration * 0.6, volume * 0.32, when, 0.003);
     }
 
     private chime(when: number, volume: number): void {
         this.tone('sine', 1046.5, 1046.5, 0.42, volume, when, 0.005);
-        this.tone('sine', 1568, 1568, 0.32, volume * 0.5, when + 0.015, 0.005);
-        this.tone('triangle', 2093, 2093, 0.2, volume * 0.22, when + 0.03, 0.004);
+        this.tone('sine', 1571, 1571, 0.32, volume * 0.46, when + 0.015, 0.005);
+        this.tone('sine', 2093, 2093, 0.22, volume * 0.2, when + 0.03, 0.004);
     }
 
     private tone(
@@ -560,11 +597,11 @@ class GameAudio {
         const buffer = this.musicBuffers.get(mode);
 
         if (!buffer) {
-            if (this.musicRendering !== mode) {
-                void this.renderMusic(mode);
-            }
+            this.requestMusicRender(mode);
             return;
         }
+
+        this.stopFadingMusicSources();
 
         try {
             const context = this.context;
@@ -615,10 +652,32 @@ class GameAudio {
             // already stopped
         }
 
+        const fading = { source, gain };
+        this.fadingMusicSources.add(fading);
         source.onended = () => {
+            this.fadingMusicSources.delete(fading);
             source.disconnect();
             gain.disconnect();
         };
+    }
+
+    private stopFadingMusicSources(): void {
+        if (!this.context || this.fadingMusicSources.size === 0) {
+            return;
+        }
+
+        const now = this.context.currentTime;
+
+        this.fadingMusicSources.forEach(({ source, gain }) => {
+            try {
+                gain.gain.cancelScheduledValues(now);
+                gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), now);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
+                source.stop(now + 0.1);
+            } catch {
+                // already stopped
+            }
+        });
     }
 
     private stopMusic(): void {
@@ -629,6 +688,7 @@ class GameAudio {
         const source = this.musicSource;
         const gain = this.musicSourceGain;
 
+        this.stopFadingMusicSources();
         this.musicSource = null;
         this.musicSourceGain = null;
         this.musicSourceMode = null;
@@ -673,226 +733,352 @@ class GameAudio {
         );
     }
 
-    private async renderMusic(mode: MusicTrack): Promise<void> {
+    private requestMusicRender(mode: MusicTrack): void {
         if (
-            this.musicRendering ||
+            typeof window === 'undefined' ||
+            this.musicUnsupported ||
             this.musicBuffers.has(mode) ||
-            typeof window === 'undefined'
+            this.musicRendering === mode ||
+            this.musicRenderQueue.includes(mode)
         ) {
             return;
         }
 
+        this.musicRenderQueue.push(mode);
+        void this.drainMusicRenderQueue();
+    }
+
+    private async drainMusicRenderQueue(): Promise<void> {
+        if (this.musicDraining) {
+            return;
+        }
+
+        this.musicDraining = true;
+
+        try {
+            while (this.musicRenderQueue.length > 0) {
+                const mode = this.musicRenderQueue.shift()!;
+
+                if (this.musicBuffers.has(mode)) {
+                    continue;
+                }
+
+                this.musicRendering = mode;
+
+                try {
+                    const buffer = await this.renderMusicBuffer(mode);
+                    this.musicBuffers.set(mode, buffer);
+                } catch {
+                    this.musicUnsupported = true;
+                } finally {
+                    this.musicRendering = null;
+                }
+
+                if (this.musicMode !== mode) {
+                    this.syncMusic();
+                } else if (this.unlocked && this.musicEnabled && !this.hidden) {
+                    this.startMusic();
+                }
+            }
+        } finally {
+            this.musicDraining = false;
+        }
+    }
+
+    private async renderMusicBuffer(mode: MusicTrack): Promise<AudioBuffer> {
         const OfflineCtor =
             window.OfflineAudioContext ??
             (window as Window & { webkitOfflineAudioContext?: typeof OfflineAudioContext })
                 .webkitOfflineAudioContext;
 
         if (!OfflineCtor) {
-            this.musicUnsupported = true;
-            return;
+            throw new Error('OfflineAudioContext unavailable');
         }
 
-        this.musicRendering = mode;
+        const score = buildMusicScore(mode);
+        const beat = 60 / score.bpm;
+        const loopSeconds = score.bars * 4 * beat;
+        const offline = new OfflineCtor(
+            2,
+            Math.ceil((loopSeconds + score.tailSeconds) * MUSIC_SAMPLE_RATE),
+            MUSIC_SAMPLE_RATE
+        );
 
-        try {
-            const sampleRate = 24000;
-            const bpm = mode === 'menu' ? 82 : 100;
-            const beat = 60 / bpm;
-            const bar = beat * 4;
-            const duration = bar * 4;
-            const offline = new OfflineCtor(
-                1,
-                Math.ceil(sampleRate * duration),
-                sampleRate
-            );
+        const compressor = offline.createDynamicsCompressor();
+        compressor.threshold.value = -14;
+        compressor.knee.value = 14;
+        compressor.ratio.value = 3.5;
+        compressor.attack.value = 0.006;
+        compressor.release.value = 0.18;
+        compressor.connect(offline.destination);
 
-            const master = offline.createGain();
-            master.gain.setValueAtTime(0.0001, 0);
-            master.gain.linearRampToValueAtTime(0.85, 0.02);
-            master.gain.setValueAtTime(0.85, duration - 0.02);
-            master.gain.linearRampToValueAtTime(0.0001, duration);
-            master.connect(offline.destination);
+        const master = offline.createGain();
+        master.gain.value = 0.78;
+        master.connect(compressor);
 
-            const delay = offline.createDelay(0.7);
-            delay.delayTime.value = mode === 'menu' ? 0.28 : 0.22;
-            const feedback = offline.createGain();
-            feedback.gain.value = mode === 'menu' ? 0.18 : 0.14;
-            const delayFilter = offline.createBiquadFilter();
-            delayFilter.type = 'lowpass';
-            delayFilter.frequency.value = mode === 'menu' ? 1800 : 2200;
-            const delayLevel = offline.createGain();
-            delayLevel.gain.value = mode === 'menu' ? 0.3 : 0.24;
+        const dry = offline.createGain();
+        dry.gain.value = 0.92;
+        dry.connect(master);
 
-            delay.connect(delayFilter);
-            delayFilter.connect(feedback);
-            feedback.connect(delay);
-            delayFilter.connect(delayLevel);
-            delayLevel.connect(master);
+        const delay = offline.createDelay(1);
+        delay.delayTime.value = beat * 0.75;
+        const delayFilter = offline.createBiquadFilter();
+        delayFilter.type = 'lowpass';
+        delayFilter.frequency.value = mode === 'gameplay' ? 2800 : 2200;
+        delayFilter.Q.value = 0.7;
+        const feedback = offline.createGain();
+        feedback.gain.value = mode === 'gameplay' ? 0.22 : 0.18;
+        const delayLevel = offline.createGain();
+        delayLevel.gain.value = mode === 'gameplay' ? 0.24 : 0.2;
 
-            const chords =
-                mode === 'menu'
-                    ? [
-                          { notes: [57, 60, 64, 67], bass: 45 },
-                          { notes: [53, 57, 60, 64], bass: 41 },
-                          { notes: [48, 52, 55, 59], bass: 36 },
-                          { notes: [55, 59, 62, 65], bass: 43 },
-                      ]
-                    : [
-                          { notes: [60, 64, 67, 72], bass: 48 },
-                          { notes: [57, 60, 64, 69], bass: 45 },
-                          { notes: [53, 57, 60, 65], bass: 41 },
-                          { notes: [55, 59, 62, 67], bass: 43 },
-                      ];
-            const pattern =
-                mode === 'menu'
-                    ? [0, 2, 1, 2, 3, 2, 1, 0]
-                    : [0, 1, 2, 3, 2, 1, 0, 2];
+        delay.connect(delayFilter);
+        delayFilter.connect(feedback);
+        feedback.connect(delay);
+        delayFilter.connect(delayLevel);
+        delayLevel.connect(master);
 
-            chords.forEach((chord, chordIndex) => {
-                const start = chordIndex * bar;
+        const noise = this.createOfflineNoise(offline);
+        const bright = mode === 'gameplay';
 
-                this.renderPad(
-                    offline,
-                    master,
-                    start,
-                    bar + 0.2,
-                    chord.notes,
-                    mode === 'menu' ? 0.028 : 0.023,
-                    mode === 'menu' ? 1150 : 1450
+        score.events.forEach((event) => {
+            this.renderScoreEvent(offline, dry, delay, noise, event, bright);
+        });
+
+        const rendered = await offline.startRendering();
+        return this.wrapMusicTail(offline, rendered, loopSeconds);
+    }
+
+    private createOfflineNoise(context: OfflineAudioContext): AudioBuffer {
+        const buffer = context.createBuffer(1, MUSIC_SAMPLE_RATE * 2, MUSIC_SAMPLE_RATE);
+        const data = buffer.getChannelData(0);
+
+        for (let index = 0; index < data.length; index += 1) {
+            data[index] = Math.random() * 2 - 1;
+        }
+
+        return buffer;
+    }
+
+    private wrapMusicTail(
+        context: OfflineAudioContext,
+        rendered: AudioBuffer,
+        loopSeconds: number
+    ): AudioBuffer {
+        const loopFrames = Math.min(rendered.length, Math.floor(loopSeconds * rendered.sampleRate));
+        const tailFrames = rendered.length - loopFrames;
+        const result = context.createBuffer(rendered.numberOfChannels, loopFrames, rendered.sampleRate);
+
+        for (let channel = 0; channel < rendered.numberOfChannels; channel += 1) {
+            const source = rendered.getChannelData(channel);
+            const destination = result.getChannelData(channel);
+
+            for (let index = 0; index < loopFrames; index += 1) {
+                destination[index] = source[index];
+            }
+
+            for (let index = 0; index < tailFrames; index += 1) {
+                const mixed = destination[index] + source[loopFrames + index];
+                destination[index] = Math.max(-1, Math.min(1, mixed));
+            }
+        }
+
+        return result;
+    }
+
+    private createMusicPan(context: OfflineAudioContext, pan: number): AudioNode {
+        const node = typeof context.createStereoPanner === 'function'
+            ? context.createStereoPanner()
+            : context.createGain();
+
+        if ('pan' in node) {
+            (node as StereoPannerNode).pan.value = Math.max(-1, Math.min(1, pan));
+        }
+
+        return node;
+    }
+
+    private renderScoreEvent(
+        context: OfflineAudioContext,
+        dry: AudioNode,
+        delay: AudioNode,
+        noise: AudioBuffer,
+        event: ScoreEvent,
+        bright: boolean
+    ): void {
+        switch (event.voice) {
+            case 'pad':
+                this.renderMusicTone(context, dry, delay, event, 'triangle', 7, bright ? 1600 : 1250, 0.55, 0.6, 0);
+                break;
+            case 'chord':
+                this.renderMusicTone(context, dry, delay, event, 'triangle', 5, bright ? 2600 : 2100, 0.014, 0.24, 0.06);
+                break;
+            case 'arp':
+                this.renderMusicTone(context, dry, delay, event, 'triangle', 0, bright ? 3400 : 2800, 0.004, 0.18, 0.22);
+                break;
+            case 'lead':
+                this.renderMusicTone(context, dry, delay, event, 'triangle', 6, bright ? 3600 : 3000, 0.018, 0.3, 0.18);
+                this.renderMusicTone(
+                    context,
+                    dry,
+                    delay,
+                    { ...event, midi: (event.midi ?? 60) + 12, velocity: event.velocity * 0.24 },
+                    'sine',
+                    0,
+                    bright ? 5000 : 4200,
+                    0.012,
+                    0.22,
+                    0.12
                 );
-                this.renderBass(
-                    offline,
-                    master,
-                    start,
-                    chord.bass,
-                    mode === 'menu' ? 0.04 : 0.045
+                break;
+            case 'bass':
+                this.renderMusicTone(context, dry, delay, event, 'sine', 0, 320, 0.008, 0.14, 0);
+                this.renderMusicTone(
+                    context,
+                    dry,
+                    delay,
+                    { ...event, midi: (event.midi ?? 48) + 12, velocity: event.velocity * 0.32 },
+                    'triangle',
+                    0,
+                    620,
+                    0.006,
+                    0.1,
+                    0
                 );
-
-                if (mode === 'gameplay') {
-                    this.renderBass(offline, master, start + bar / 2, chord.bass + 7, 0.02);
-                }
-
-                for (let step = 0; step < 8; step++) {
-                    const note = chord.notes[pattern[step]] + 12;
-                    const when = start + step * (beat / 2);
-                    this.renderPluck(
-                        offline,
-                        master,
-                        delay,
-                        when,
-                        note,
-                        mode === 'menu' ? 0.03 : 0.032
-                    );
-                }
-            });
-
-            const buffer = await offline.startRendering();
-            this.musicBuffers.set(mode, buffer);
-        } catch {
-            this.musicUnsupported = true;
-        } finally {
-            this.musicRendering = null;
-        }
-
-        if (this.musicMode !== mode) {
-            this.syncMusic();
-            return;
-        }
-
-        if (
-            this.unlocked &&
-            this.musicEnabled &&
-            !this.hidden &&
-            this.musicBuffers.has(mode)
-        ) {
-            this.startMusic();
+                break;
+            case 'kick':
+                this.renderKick(context, dry, event);
+                break;
+            case 'snare':
+                this.renderNoiseHit(context, dry, noise, event, 'highpass', 900, 0.7);
+                this.renderMusicTone(
+                    context,
+                    dry,
+                    delay,
+                    { ...event, midi: 48, velocity: event.velocity * 0.42 },
+                    'triangle',
+                    0,
+                    900,
+                    0.002,
+                    0.06,
+                    0
+                );
+                break;
+            case 'hat':
+                this.renderNoiseHit(context, dry, noise, event, 'highpass', 6200, 0.6);
+                break;
+            case 'clap':
+                this.renderNoiseHit(context, dry, noise, event, 'bandpass', 1500, 1.1);
+                break;
+            case 'perc':
+                this.renderNoiseHit(context, dry, noise, event, 'bandpass', 2600, 1.4);
+                break;
         }
     }
 
-    private renderPad(
+    private renderMusicTone(
         context: OfflineAudioContext,
         destination: AudioNode,
-        start: number,
-        duration: number,
-        notes: number[],
-        level = 0.03,
-        cutoff = 1150
+        send: AudioNode,
+        event: ScoreEvent,
+        type: OscillatorType,
+        detune: number,
+        cutoff: number,
+        attack: number,
+        release: number,
+        sendLevel: number
     ): void {
+        const frequency = midiToHz(event.midi ?? 60);
+        const start = event.time;
+        const end = start + event.duration + release;
+        const hold = Math.max(start + attack, end - release * 0.8);
+
         const filter = context.createBiquadFilter();
         filter.type = 'lowpass';
         filter.frequency.value = cutoff;
-        filter.Q.value = 0.6;
-        filter.connect(destination);
+        filter.Q.value = 0.7;
 
-        notes.forEach((note, index) => {
+        const gain = context.createGain();
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.linearRampToValueAtTime(event.velocity, start + attack);
+        gain.gain.setValueAtTime(event.velocity, hold);
+        gain.gain.exponentialRampToValueAtTime(0.0001, end);
+
+        const pan = this.createMusicPan(context, event.pan);
+        filter.connect(gain);
+        gain.connect(pan);
+        pan.connect(destination);
+
+        if (sendLevel > 0) {
+            const effectSend = context.createGain();
+            effectSend.gain.value = sendLevel;
+            pan.connect(effectSend);
+            effectSend.connect(send);
+        }
+
+        const detunes = detune > 0 ? [-detune, detune] : [0];
+
+        detunes.forEach((cents) => {
             const oscillator = context.createOscillator();
-            const gain = context.createGain();
-            const voiceLevel = Math.max(0.012, level - index * 0.003);
-
-            oscillator.type = index % 2 === 0 ? 'sine' : 'triangle';
-            oscillator.frequency.value = midiToHz(note);
-            gain.gain.setValueAtTime(0.0001, start);
-            gain.gain.linearRampToValueAtTime(voiceLevel, start + 0.55);
-            gain.gain.setValueAtTime(voiceLevel, start + duration - 0.85);
-            gain.gain.linearRampToValueAtTime(0.0001, start + duration);
-
-            oscillator.connect(gain);
-            gain.connect(filter);
+            oscillator.type = type;
+            oscillator.frequency.value = frequency;
+            oscillator.detune.value = cents;
+            oscillator.connect(filter);
             oscillator.start(start);
-            oscillator.stop(start + duration + 0.02);
+            oscillator.stop(end + 0.02);
         });
     }
 
-    private renderBass(
+    private renderNoiseHit(
         context: OfflineAudioContext,
         destination: AudioNode,
-        start: number,
-        midi: number,
-        level = 0.045
+        noise: AudioBuffer,
+        event: ScoreEvent,
+        filterType: BiquadFilterType,
+        frequency: number,
+        q: number
     ): void {
-        const oscillator = context.createOscillator();
+        const source = context.createBufferSource();
+        const filter = context.createBiquadFilter();
         const gain = context.createGain();
-        const duration = 1.2;
+        const start = event.time;
+        const end = start + event.duration;
 
-        oscillator.type = 'sine';
-        oscillator.frequency.value = midiToHz(midi);
+        source.buffer = noise;
+        filter.type = filterType;
+        filter.frequency.value = frequency;
+        filter.Q.value = q;
         gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.linearRampToValueAtTime(level, start + 0.05);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-        oscillator.connect(gain);
-        gain.connect(destination);
-        oscillator.start(start);
-        oscillator.stop(start + duration + 0.02);
+        gain.gain.exponentialRampToValueAtTime(event.velocity, start + 0.003);
+        gain.gain.exponentialRampToValueAtTime(0.0001, end);
+
+        const pan = this.createMusicPan(context, event.pan);
+        source.connect(filter);
+        filter.connect(gain);
+        gain.connect(pan);
+        pan.connect(destination);
+        source.start(start, Math.random() * 0.5, event.duration + 0.01);
     }
 
-    private renderPluck(
+    private renderKick(
         context: OfflineAudioContext,
         destination: AudioNode,
-        delay: AudioNode,
-        start: number,
-        midi: number,
-        level: number
+        event: ScoreEvent
     ): void {
         const oscillator = context.createOscillator();
         const gain = context.createGain();
-        const send = context.createGain();
-        const duration = 0.34;
-        const frequency = midiToHz(midi);
+        const start = event.time;
+        const end = start + event.duration;
 
-        oscillator.type = 'triangle';
-        oscillator.frequency.value = frequency;
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(150, start);
+        oscillator.frequency.exponentialRampToValueAtTime(48, start + 0.12);
         gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(level, start + 0.012);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-
-        send.gain.value = 0.4;
-
+        gain.gain.exponentialRampToValueAtTime(event.velocity, start + 0.004);
+        gain.gain.exponentialRampToValueAtTime(0.0001, end);
         oscillator.connect(gain);
         gain.connect(destination);
-        gain.connect(send);
-        send.connect(delay);
         oscillator.start(start);
-        oscillator.stop(start + duration + 0.02);
+        oscillator.stop(end + 0.02);
     }
 }
 

@@ -17,6 +17,8 @@ import {
 } from '../data/levels/map';
 import {
     resolveLevelProgressState,
+    isStarterUnlocked,
+    STARTER_UNLOCK_TEXT,
     type LevelProgressState,
 } from '../data/levels/progress';
 import { loadProgress, addCoins, type Progress } from '../utils/storage';
@@ -33,30 +35,80 @@ import {
     levelBreakpointForWidth,
     type LevelBreakpointId,
 } from '../levelBreakpoints';
-import { starterPopupGeometry, type StarterPopupGeometry } from '../offers/starterPopupLayout';
+import { starterPopupGeometry } from '../offers/starterPopupLayout';
 import {
     LEVEL_HUD_SCALE,
     mobileSideButtonLayout,
     mobileTopBarLayout,
+    starterDecorationLayout,
+    type StarterDecorationLayout,
 } from '../levelSectionLayout';
 import {
-    STARTER_PACK_COINS,
-    STARTER_PACK_PRICE_BDT,
     STARTER_PACK_TITLE,
     formatOfferCountdown,
-    getStarterPackDeadline,
-    isStarterPackExpired,
-    starterPackRemainingMs,
+    getStarterPackState,
+    markStarterPackPurchased,
+    starterPackProduct,
+    type StarterPackOffer,
+    type StarterPackState,
 } from '../offers/starterPack';
-import { requestPurchase, verifyTransaction, hasProcessedTransaction, markTransactionProcessed } from '../payments/payments';
+import { grantPowerUp } from '../powerups/inventory';
+import { requestPurchase, verifyTransaction, hasProcessedTransaction, markTransactionProcessed, finalizePurchase, queryLocalizedPrices, type LocalizedPrice } from '../payments/payments';
 import type { RealMoneyProduct } from '../store/realMoneyCatalog';
-import { acquireModalInputLock, releaseModalInputLock } from '../input/modalInputLock';
+import { acquireModalInputLock, releaseModalInputLock, clearPointerSuppression, isPointerReleaseSuppressed, suppressPointerRelease } from '../input/modalInputLock';
 import { exitAndroidApp } from '../input/androidBack';
 import { claimCollectedReward, getCollectedCount, isCollectedRewardAvailable, loadCollectedState } from '../collected/collected';
 
 let VIEW_TOP = mapViewTopY();
 let VIEW_BOTTOM = mapViewBottomY();
 const DRAG_THRESHOLD = 10;
+type HowToIcon = 'target' | 'shoot' | 'star' | 'power' | 'coins' | 'progress';
+
+interface HowToSection {
+    number: string;
+    title: string;
+    icon: HowToIcon;
+    lines: string[];
+}
+
+const HOW_TO_TITLE = 'HOW TO PLAY';
+const HOW_TO_CLOSING = 'Good Luck & Happy Shooting!';
+const HOW_TO_TITLE_HEIGHT = 62;
+const HOW_TO_FOOTER_HEIGHT = 78;
+const HOW_TO_SECTION_GAP = 14;
+
+const HOW_TO_SECTIONS: HowToSection[] = [
+    { number: '1.', title: 'Objective', icon: 'target', lines: ['Match 3 or more bubbles of the same color to pop them and clear the board.'] },
+    { number: '2.', title: 'How to Shoot', icon: 'shoot', lines: ['Aim your launcher toward the bubbles.', 'Tap or release to shoot.', 'Match the same-colored bubbles to destroy them.', 'Clear all required bubbles to complete the level.'] },
+    { number: '3.', title: 'Earn Stars', icon: 'star', lines: ['Complete levels using fewer shots to earn more stars.', 'Earn up to 3 stars depending on your shooting performance.'] },
+    { number: '4.', title: 'Power-Ups', icon: 'power', lines: ['Fire: Destroy multiple bubbles in its path.', 'Bomb: Blast nearby bubbles.', 'Color Change: Change your current bubble color.', 'Streak: Earn bonus power through consecutive successful shots.'] },
+    { number: '5.', title: 'Coins & Rewards', icon: 'coins', lines: ['Earn coins by completing levels and claiming available rewards.', 'Use coins to unlock useful items and power-ups.'] },
+    { number: '6.', title: 'Level Progress', icon: 'progress', lines: ['Complete levels, collect stars, and unlock new challenges.'] },
+];
+
+interface HowToPlayLayout {
+    panelW: number;
+    panelH: number;
+    panelX: number;
+    panelY: number;
+    contentTop: number;
+    contentH: number;
+    scale: number;
+    scrollable: boolean;
+}
+
+const howToPlayLayout = (viewW: number, viewH: number): HowToPlayLayout => {
+    const w = Number.isFinite(viewW) && viewW > 0 ? viewW : 700;
+    const h = Number.isFinite(viewH) && viewH > 0 ? viewH : 960;
+    const scale = Math.max(0.72, Math.min(1, w / 700));
+    const panelW = Math.min(600 * scale, w - 48);
+    const panelH = Math.min(820 * scale, h - 48);
+    const panelX = w / 2;
+    const panelY = (h - panelH) / 2;
+    const contentTop = panelY + HOW_TO_TITLE_HEIGHT * scale;
+    const contentH = panelH - (HOW_TO_TITLE_HEIGHT + HOW_TO_FOOTER_HEIGHT) * scale;
+    return { panelW, panelH, panelX, panelY, contentTop, contentH, scale, scrollable: false };
+};
 /**
  * How many rows beyond the viewport stay materialized (buttons) and drawn
  * (road). Nodes use a page-ish buffer so fast flings never show a gap; the
@@ -89,7 +141,7 @@ export class LevelSelectionScene extends Scene {
      * Virtualized level nodes: `entries` always holds all 1000 stops, but
      * only the ones near the viewport exist as Phaser objects. Keeps scene
      * creation (and therefore page navigation) fast while looking
-     * identical — every visible node is the exact same object tree as the
+     * identical - every visible node is the exact same object tree as the
      * previous full build.
      */
     private readonly nodeByIndex = new Map<number, Phaser.GameObjects.Container>();
@@ -101,6 +153,22 @@ export class LevelSelectionScene extends Scene {
     private collectClaimedText: Phaser.GameObjects.Text | null = null;
     private currentLevelIndex = 0;
     private infoPanel: Phaser.GameObjects.Container | null = null;
+    /** Vertical scroll state for the How to Play popup on short screens. */
+    private infoScroll: {
+        layer: Phaser.GameObjects.Container;
+        mask: Phaser.GameObjects.Graphics;
+        min: number;
+        y: number;
+        dragging: boolean;
+        startY: number;
+        startScroll: number;
+        top: number;
+        bottom: number;
+        down: (pointer: Phaser.Input.Pointer) => void;
+        move: (pointer: Phaser.Input.Pointer) => void;
+        up: () => void;
+        wheel: (pointer: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[], dx: number, dy: number) => void;
+    } | null = null;
     private levelPopup: LevelPopup | null = null;
     private exitGamePanel: BackConfirmationPanel | null = null;
     private dailyPopup: Phaser.GameObjects.Container | null = null;
@@ -109,9 +177,14 @@ export class LevelSelectionScene extends Scene {
     private starterTimer: Phaser.Time.TimerEvent | null = null;
     private starterTimeText: Phaser.GameObjects.Text | null = null;
     private starterBuyText: Phaser.GameObjects.Text | null = null;
-    private starterBuyBg: Phaser.GameObjects.Graphics | null = null;
+    private starterBuyRedraw: (() => void) | null = null;
     private starterStatusText: Phaser.GameObjects.Text | null = null;
-    private starterGeometry: StarterPopupGeometry | null = null;
+    private starterOfferText: Phaser.GameObjects.Text | null = null;
+    private starterPriceText: Phaser.GameObjects.Text | null = null;
+    private starterDiscountText: Phaser.GameObjects.Text | null = null;
+    private starterLocalizedPrices: Map<string, LocalizedPrice> = new Map();
+    private starterActiveOffer: StarterPackOffer | null = null;
+    private starterCycleIndex = -1;
     /** Internal scroll used only when the enlarged card cannot fit vertically. */
     private starterScroll: {
         layer: Phaser.GameObjects.Container;
@@ -129,6 +202,15 @@ export class LevelSelectionScene extends Scene {
     } | null = null;
     private starterBuyDisabled = false;
     private starterPurchasing = false;
+    private starterUi: {
+        button: Phaser.GameObjects.Container;
+        overlay: Phaser.GameObjects.Graphics;
+        unlockText: Phaser.GameObjects.Text;
+        hit: Phaser.GameObjects.Arc;
+        lockIcon: Phaser.GameObjects.Container;
+        message: Phaser.GameObjects.Text;
+    } | null = null;
+    private starterUnlocked: boolean | null = null;
     private selectedRing!: Phaser.GameObjects.Graphics;
 
     constructor() {
@@ -153,12 +235,7 @@ export class LevelSelectionScene extends Scene {
         this.mobileUi = band.mobile;
     }
 
-    /** Mobile-only dimensions were tuned at 1.18x; scale them down from there. */
-    private get mobileScale(): number {
-        return this.mobileUi ? this.uiScale / 1.18 : 1;
-    }
-
-    /** Effective scale for every Level Section HUD button (band × HUD size). */
+    /** Effective scale for every Level Section HUD button (band - HUD size). */
     private get hudScale(): number {
         return this.uiScale * LEVEL_HUD_SCALE;
     }
@@ -258,15 +335,20 @@ export class LevelSelectionScene extends Scene {
         this.starterTimer = null;
         this.starterTimeText = null;
         this.starterBuyText = null;
-        this.starterBuyBg = null;
+        this.starterBuyRedraw = null;
         this.starterStatusText = null;
+        this.starterOfferText = null;
+        this.starterPriceText = null;
+        this.starterDiscountText = null;
+        this.starterLocalizedPrices = new Map();
+        this.starterActiveOffer = null;
+        this.starterCycleIndex = -1;
         this.starterBuyDisabled = false;
         this.starterPurchasing = false;
+        this.starterUi = null;
+        this.starterUnlocked = null;
         this.scrollTween = null;
-        // Offer clock always runs on the Level Path: start (or resume the
-        // persisted) 71:59:18 deadline now so it never pauses while the
-        // popup is closed or the player navigates the map.
-        getStarterPackDeadline();
+        getStarterPackState();
         this.starterTimer = this.time.addEvent({ delay: 1000, loop: true, callback: () => this.tickStarterPack() });
         this.progress = loadProgress();
         this.entries = buildLevelMap(LEVELS, this.progress);
@@ -291,12 +373,13 @@ export class LevelSelectionScene extends Scene {
         this.hudLayer = this.add.container(0, 0).setDepth(40);
         this.createHud();
         this.createSideButtons();
+        this.syncStarterLock();
         this.showDailyPopup();
         this.createPlayButton();
         this.bindInput();
         // Instantly centre the current playable (selected/frontier) level at
-        // the vertical centre of the visible map area — exact level centre,
-        // not the page band — with no scroll animation on open. This also
+        // the vertical centre of the visible map area - exact level centre,
+        // not the page band - with no scroll animation on open. This also
         // materializes the visible node + road window.
         this.centerLevelInstantly(this.selectedLevel);
         this.refreshHud();
@@ -337,10 +420,17 @@ export class LevelSelectionScene extends Scene {
         }
         this.starterTimeText = null;
         this.starterBuyText = null;
-        this.starterBuyBg = null;
+        this.starterBuyRedraw = null;
         this.starterStatusText = null;
+        this.starterOfferText = null;
+        this.starterPriceText = null;
+        this.starterDiscountText = null;
+        this.starterLocalizedPrices = new Map();
+        this.starterActiveOffer = null;
+        this.starterCycleIndex = -1;
         this.starterBuyDisabled = false;
         this.starterPurchasing = false;
+        this.starterUi = null;
         const starterScroll = this.starterScroll;
         if (starterScroll) {
             this.input.off('pointerdown', starterScroll.down);
@@ -351,7 +441,6 @@ export class LevelSelectionScene extends Scene {
             starterScroll.mask.destroy();
             this.starterScroll = null;
         }
-        this.starterGeometry = null;
         releaseModalInputLock('starter-pack');
         this.starterPopup = null;
 
@@ -359,6 +448,7 @@ export class LevelSelectionScene extends Scene {
         this.levelPopup = null;
         this.exitGamePanel?.destroy();
         this.exitGamePanel = null;
+        this.removeInfoScroll();
         this.infoPanel = null;
         this.tweens.killTweensOf(this.mapLayer);
     }
@@ -437,7 +527,10 @@ export class LevelSelectionScene extends Scene {
             useHandCursor: !locked,
         });
         node.add(hit);
-        hit.on('pointerup', () => this.trySelect(entry.index));
+        hit.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+            if (isPointerReleaseSuppressed(pointer.id)) return;
+            this.trySelect(entry.index);
+        });
         this.nodeLayer.add(node);
         return node;
     }
@@ -447,7 +540,7 @@ export class LevelSelectionScene extends Scene {
      * the sandy road alive only around the visible viewport (plus a buffer),
      * creating and destroying rows as the player scrolls. Node Y decreases
      * as the index grows, so the visible band maps directly onto an index
-     * range — no per-frame scanning of all 1000 entries.
+     * range - no per-frame scanning of all 1000 entries.
      */
     private syncVisibleMap(): void {
         const count = this.entries.length;
@@ -515,7 +608,7 @@ export class LevelSelectionScene extends Scene {
     /**
      * Reference-style level button: glossy 3D discs. Completed/current are
      * bright purple, current adds a green glow, locked is grey. Layered
-     * shadow → outer rim → main disc → inner light → highlight → border
+     * shadow - outer rim - main disc - inner light - highlight - border
      * gives the depth without changing the 26px radius or touch target.
      */
     private drawLevelButton(
@@ -716,7 +809,7 @@ export class LevelSelectionScene extends Scene {
             })
             .setOrigin(1, 0.5);
         this.collectPercentText.setName('collect-count');
-        // CLAIM 20 COINS button over the bar — only visible at 15/15.
+        // CLAIM 20 COINS button over the bar - only visible at 15/15.
         const claimS = this.uiScale;
         const claimW = Math.round(158 * claimS);
         const claimH = Math.round(22 * claimS);
@@ -797,11 +890,11 @@ export class LevelSelectionScene extends Scene {
         // One layout for every band: the scaled discs/labels drive the
         // spacing and insets, so larger buttons stay separated and on-screen.
         const side = mobileSideButtonLayout(this.hudScale, width);
-        this.hudLayer.add(this.createSideButton(side.leftX, side.y1, 'STARTER', 'UNLOCK LV. 10', 'chest'));
-        this.hudLayer.add(this.createSideButton(side.leftX, side.y2, 'GIFT', 'UNLOCK LV. 25', 'gift'));
-        this.hudLayer.add(this.createSideButton(side.leftX, side.y3, 'DAILY', 'UNLOCK LV. 50', 'star'));
-        this.hudLayer.add(this.createSideButton(side.rightX, side.y1, 'SALE', 'UNLOCK LV. 15', 'sale'));
-        this.hudLayer.add(this.createSideButton(side.rightX, side.y2, 'LOCKED', 'UNLOCK LV. 100', 'sale'));
+        this.hudLayer.add(this.createSideButton(side.leftX, side.y1, 'STARTER', STARTER_UNLOCK_TEXT, 'chest'));
+        this.hudLayer.add(this.createSideButton(side.leftX, side.y2, 'GIFT', '', 'gift'));
+        this.hudLayer.add(this.createSideButton(side.leftX, side.y3, 'DAILY', '', 'star'));
+        this.hudLayer.add(this.createSideButton(side.rightX, side.y1, 'SALE', 'UNLOCK LV. 550', 'sale'));
+        this.hudLayer.add(this.createSideButton(side.rightX, side.y2, 'LOCKED', 'UNLOCK LV. 800', 'sale'));
     }
 
     /**
@@ -896,15 +989,20 @@ export class LevelSelectionScene extends Scene {
         this.drawBlueGlossyCircle(graphics, radius);
         const icon = this.add.graphics().setScale(s);
         this.drawSideIcon(icon, kind);
-        // Lock badge removed from the Starter Pack, Gift and Daily buttons —
-        // they stay unlocked/enabled with their original icons restored.
-        if (title !== 'DAILY' && title !== 'GIFT' && title !== 'STARTER') {
+        if (title === 'SALE' || title === 'LOCKED') {
             graphics.fillStyle(0x64748b, 1);
             graphics.fillCircle(15 * s, 15 * s, 7 * s);
             graphics.fillStyle(0xe5e7eb, 1);
             graphics.fillRect(11 * s, 13 * s, 8 * s, 6 * s);
             graphics.lineStyle(Math.max(1.5, 2 * s), 0xe5e7eb, 1);
             graphics.strokeCircle(15 * s, 11 * s, 3 * s);
+        }
+        const isStarter = title === 'STARTER';
+        const overlay = isStarter ? this.add.graphics() : null;
+        if (overlay) {
+            overlay.fillStyle(0x0f172a, 0.62);
+            overlay.fillCircle(0, 0, radius);
+            overlay.setVisible(false);
         }
         const titleText = this.add
             .text(0, Math.round(30 * s), title, {
@@ -915,15 +1013,17 @@ export class LevelSelectionScene extends Scene {
                 strokeThickness: 3,
             })
             .setOrigin(0.5);
-        const unlockText = this.add
-            .text(0, Math.round(41 * s), unlock, {
-                fontFamily: FONT_DISPLAY,
-                fontSize: `${Math.round(7 * s)}px`,
-                color: '#fde68a',
-                stroke: '#0a3d91',
-                strokeThickness: 2,
-            })
-            .setOrigin(0.5);
+        const unlockText = unlock
+            ? this.add
+                .text(0, Math.round(41 * s), unlock, {
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: `${Math.round(7 * s)}px`,
+                    color: '#fde68a',
+                    stroke: '#0a3d91',
+                    strokeThickness: 2,
+                })
+                .setOrigin(0.5)
+            : null;
         const hit = this.add.circle(0, 0, Math.round(26 * s), 0xffffff, 0.001).setInteractive({ useHandCursor: true });
         hit.setData('sideButton', true);
         if (title === 'DAILY') {
@@ -941,11 +1041,15 @@ export class LevelSelectionScene extends Scene {
                 this.locked = true;
                 goToSceneInstant(this, 'GiftItemsScene', { returnTo: 'LevelSelectionScene', instant: true });
             });
-        } else if (title === 'STARTER') {
+        } else if (isStarter) {
             // STARTER (Status) button opens the Starter Pack offer popup
-            // directly — no other button or gameplay changes.
+            // directly - only after enough real levels have been completed.
             hit.on('pointerdown', () => {
                 if (this.locked || this.infoPanel || this.starterPopup || this.levelPopup?.isOpen) return;
+                if (!isStarterUnlocked(this.progress)) {
+                    this.showStarterUnlockRequirement();
+                    return;
+                }
                 this.hideDailyPopup();
                 this.showStarterPackPopup();
             });
@@ -957,8 +1061,117 @@ export class LevelSelectionScene extends Scene {
                 }
             });
         }
-        button.add([graphics, icon, titleText, unlockText, hit]);
+        const children: Phaser.GameObjects.GameObject[] = [graphics, icon];
+        if (overlay) {
+            children.push(overlay);
+        }
+        children.push(titleText);
+        if (unlockText) {
+            children.push(unlockText);
+        }
+        children.push(hit);
+        button.add(children);
+        if (overlay && unlockText) {
+            this.createStarterLockedDecorations(button, x, s, overlay, unlockText, hit, starterDecorationLayout(mobileSideButtonLayout(s, worldWidth()), s, worldWidth()));
+        }
         return button;
+    }
+
+    /** Builds the lock icon and requirement label shown only while Starter is locked. */
+    private createStarterLockedDecorations(
+        button: Phaser.GameObjects.Container,
+        x: number,
+        s: number,
+        overlay: Phaser.GameObjects.Graphics,
+        unlockText: Phaser.GameObjects.Text,
+        hit: Phaser.GameObjects.Arc,
+        layout: StarterDecorationLayout
+    ): void {
+        const lockIcon = this.add.container(x, layout.lockY);
+        const lockGfx = this.add.graphics();
+        const ls = Math.max(0.9, s);
+        const backR = layout.lockRadius;
+        lockGfx.fillStyle(0x020617, 0.6);
+        lockGfx.fillCircle(0, 0, backR);
+        lockGfx.fillStyle(0x94a3b8, 1);
+        lockGfx.fillRoundedRect(-8 * ls, -2 * ls, 16 * ls, 12 * ls, 3 * ls);
+        lockGfx.lineStyle(Math.max(1.5, 2 * ls), 0xe5e7eb, 1);
+        lockGfx.beginPath();
+        lockGfx.arc(0, -2 * ls, 6 * ls, Math.PI, 0, true);
+        lockGfx.strokePath();
+        lockGfx.strokeRoundedRect(-8 * ls, -2 * ls, 16 * ls, 12 * ls, 3 * ls);
+        lockGfx.fillStyle(0x1e293b, 1);
+        lockGfx.fillCircle(0, 3 * ls, Math.max(1.4, 1.8 * ls));
+        lockGfx.fillRect(-Math.max(0.8, 0.9 * ls), 3 * ls, Math.max(1.6, 1.8 * ls), 3 * ls);
+        lockIcon.add(lockGfx);
+        lockIcon.setVisible(false);
+        this.hudLayer.add(lockIcon);
+
+        const message = this.add.text(0, 0, 'Complete 20 Levels to Unlock', {
+            fontFamily: FONT_DISPLAY,
+            fontSize: `${Math.round(7 * s)}px`,
+            color: '#fde68a',
+            stroke: '#0a3d91',
+            strokeThickness: 2,
+            align: 'center',
+            wordWrap: { width: layout.messageWidth },
+        }).setOrigin(0.5, 0);
+        const half = message.width / 2;
+        const margin = 6;
+        const messageX = Math.max(half + margin, Math.min(worldWidth() - half - margin, x));
+        message.setPosition(messageX, layout.messageY);
+        message.setVisible(false);
+        this.hudLayer.add(message);
+
+        this.starterUi = { button, overlay, unlockText, hit, lockIcon, message };
+    }
+
+    /** Reflects persisted completion progress onto the Starter button decoration. */
+    private syncStarterLock(): void {
+        const ui = this.starterUi;
+        if (!ui) {
+            return;
+        }
+
+        const unlocked = isStarterUnlocked(this.progress);
+        if (unlocked === this.starterUnlocked) {
+            return;
+        }
+
+        this.starterUnlocked = unlocked;
+        ui.button.setAlpha(unlocked ? 1 : 0.62);
+        ui.overlay.setVisible(!unlocked);
+        ui.unlockText.setVisible(!unlocked);
+        ui.lockIcon.setVisible(!unlocked);
+        this.tweens.killTweensOf(ui.message);
+        ui.message.setAlpha(1);
+        ui.message.setVisible(false);
+        if (ui.hit.input) {
+            ui.hit.input.cursor = unlocked ? 'pointer' : false;
+        }
+    }
+
+    private showStarterUnlockRequirement(): void {
+        const ui = this.starterUi;
+        if (!ui || isStarterUnlocked(this.progress)) {
+            return;
+        }
+
+        this.tweens.killTweensOf(ui.message);
+        ui.message.setText(`${STARTER_UNLOCK_TEXT} to open the Starter Offer.`);
+        ui.message.setAlpha(1);
+        ui.message.setVisible(true);
+        this.tweens.add({
+            targets: ui.message,
+            alpha: 0,
+            delay: 1600,
+            duration: 350,
+            ease: 'Quad.easeIn',
+            onComplete: () => {
+                ui.message.setVisible(false);
+                ui.message.setAlpha(1);
+            },
+        });
     }
     private drawSideIcon(graphics: Phaser.GameObjects.Graphics, kind: 'chest' | 'gift' | 'sale' | 'star'): void {
         if (kind === 'chest') {
@@ -1050,6 +1263,8 @@ export class LevelSelectionScene extends Scene {
     }
 
     private bindInput(): void {
+        this.input.on('pointerup', this.onAnyPointerUp, this);
+        this.input.on('pointerupoutside', this.onAnyPointerUp, this);
         this.input.on('pointerdown', this.onPointerDown, this);
         this.input.on('pointermove', this.onPointerMove, this);
         this.input.on('pointerup', this.onPointerUp, this);
@@ -1057,10 +1272,16 @@ export class LevelSelectionScene extends Scene {
     }
 
     private unbindInput(): void {
+        this.input.off('pointerup', this.onAnyPointerUp, this);
+        this.input.off('pointerupoutside', this.onAnyPointerUp, this);
         this.input.off('pointerdown', this.onPointerDown, this);
         this.input.off('pointermove', this.onPointerMove, this);
         this.input.off('pointerup', this.onPointerUp, this);
         this.input.off('wheel', this.onWheel, this);
+    }
+
+    private onAnyPointerUp(pointer: Phaser.Input.Pointer): void {
+        clearPointerSuppression(pointer.id);
     }
 
     private onPointerDown(pointer: Phaser.Input.Pointer): void {
@@ -1131,7 +1352,7 @@ export class LevelSelectionScene extends Scene {
         this.scrollY = bounds.clamp(next);
         // The whole map (road + the materialized window of level buttons)
         // lives in this one layer, so scrolling moves road and buttons
-        // together — only the layer offset changes plus the cheap
+        // together - only the layer offset changes plus the cheap
         // window sync that swaps far rows for near ones.
         this.mapLayer.setY(this.scrollY);
         this.syncVisibleMap();
@@ -1230,8 +1451,8 @@ export class LevelSelectionScene extends Scene {
      * area (VIEW_TOP..VIEW_BOTTOM), using its actual road position. The
      * horizontal position is untouched and the prior scroll tween is
      * killed. Deliberately unclamped so even the first/last levels centre
-     * exactly — drag/wheel scrolling afterwards stays clamped. Used for
-     * the opening scroll — no animation.
+     * exactly - drag/wheel scrolling afterwards stays clamped. Used for
+     * the opening scroll - no animation.
      */
     private centerLevelInstantly(index: number): void {
         const entry = this.entries[index];
@@ -1317,6 +1538,7 @@ export class LevelSelectionScene extends Scene {
 
     private refreshHud(): void {
         this.progress = loadProgress();
+        this.syncStarterLock();
 
         if (this.coinBalanceText) {
             this.coinBalanceText.setText(this.progress.coins.toLocaleString('en-US'));
@@ -1368,22 +1590,24 @@ export class LevelSelectionScene extends Scene {
 
     /** Starter Pack offer popup (reference-image design, no animation). */
     private showStarterPackPopup(): void {
-        if (this.starterPopup) {
+        if (this.starterPopup || !isStarterUnlocked(this.progress)) {
             return;
         }
         acquireModalInputLock('starter-pack');
         const width = worldWidth();
         const height = worldHeight();
         const geometry = starterPopupGeometry(width, height);
-        this.starterGeometry = geometry;
         const s = geometry.scale;
         const cx = width / 2;
-        // The card is centred as a group with the TIME LEFT pill below it.
         const cy = height / 2 - 24 * s;
         const popW = geometry.width;
         const popH = geometry.height;
         const top = cy - popH / 2;
-        this.starterBuyDisabled = isStarterPackExpired();
+        const starterState = getStarterPackState();
+        this.starterLocalizedPrices = new Map();
+        this.starterActiveOffer = starterState.offer;
+        this.starterCycleIndex = starterState.cycleIndex;
+        this.starterBuyDisabled = starterState.purchased;
         this.starterPurchasing = false;
 
         const popup = this.add.container(0, 0).setDepth(70);
@@ -1530,12 +1754,14 @@ export class LevelSelectionScene extends Scene {
         const limited = this.add.text(cx, bodyTop + 18 * s, 'LIMITED OFFER!', {
             fontFamily: FONT_DISPLAY, fontSize: `${Math.round(14 * s)}px`, color: '#33415c',
         }).setOrigin(0.5);
-        const offer = this.add.text(cx, bodyTop + 42 * s, `GET ${STARTER_PACK_COINS} COINS`, {
+        const offer = this.add.text(cx, bodyTop + 42 * s, `GET ${starterState.offer.coins.toLocaleString('en-US')} COINS`, {
             fontFamily: FONT_DISPLAY, fontSize: `${Math.round(26 * s)}px`, color: '#33415c',
         }).setOrigin(0.5);
-        const price = this.add.text(cx, bodyTop + 64 * s, `ONLY FOR ${STARTER_PACK_PRICE_BDT}`, {
+        const price = this.add.text(cx, bodyTop + 64 * s, `ONLY FOR ${this.starterPriceLabel(starterState.offer)}`, {
             fontFamily: FONT_DISPLAY, fontSize: `${Math.round(13 * s)}px`, color: '#5b6b8c',
         }).setOrigin(0.5);
+        this.starterOfferText = offer;
+        this.starterPriceText = price;
 
         // 70% OFF badge on the left edge at the artwork/body seam.
         const badge = this.add.graphics();
@@ -1545,12 +1771,13 @@ export class LevelSelectionScene extends Scene {
         badge.fillCircle(cx - popW / 2, bodyTop, 32 * s);
         badge.lineStyle(2 * s, 0xffffff, 0.95);
         badge.strokeCircle(cx - popW / 2, bodyTop, 32 * s);
-        const badgePct = this.add.text(cx - popW / 2, bodyTop - 9 * s, '70%', {
+        const badgePct = this.add.text(cx - popW / 2, bodyTop - 9 * s, `${starterState.offer.discountPercent}%`, {
             fontFamily: FONT_DISPLAY, fontSize: `${Math.round(16 * s)}px`, color: '#ffffff',
         }).setOrigin(0.5).setAngle(-25);
         const badgeOff = this.add.text(cx - popW / 2, bodyTop + 9 * s, 'OFF', {
             fontFamily: FONT_DISPLAY, fontSize: `${Math.round(14 * s)}px`, color: '#ffffff',
         }).setOrigin(0.5).setAngle(-25);
+        this.starterDiscountText = badgePct;
 
         const buyS = s;
         const buyW = Math.round(200 * buyS);
@@ -1573,8 +1800,8 @@ export class LevelSelectionScene extends Scene {
             buyBg.strokeRoundedRect(cx - buyW / 2, buyY - buyH / 2, buyW, buyH, 12 * buyS);
         };
         drawBuy();
-        this.starterBuyBg = buyBg;
-        const buyText = this.add.text(cx, buyY, this.starterBuyDisabled ? 'EXPIRED' : 'BUY NOW!', {
+        this.starterBuyRedraw = drawBuy;
+        const buyText = this.add.text(cx, buyY, this.starterBuyDisabled ? 'PURCHASED' : 'BUY NOW!', {
             fontFamily: FONT_DISPLAY, fontSize: `${Math.round(19 * buyS)}px`, color: '#ffffff', stroke: '#14532d', strokeThickness: 2,
         }).setOrigin(0.5);
         this.starterBuyText = buyText;
@@ -1592,13 +1819,12 @@ export class LevelSelectionScene extends Scene {
             void this.buyStarterPack();
         });
 
-        const status = this.add.text(cx, buyY + 36 * s, this.starterBuyDisabled ? 'This offer has expired.' : '', {
+        const status = this.add.text(cx, buyY + 36 * s, this.starterBuyDisabled ? 'Already claimed. New offer after reset.' : '', {
             fontFamily: FONT, fontSize: `${Math.round(11 * s)}px`, color: '#b45309', align: 'center', wordWrap: { width: popW - 40 * s },
         }).setOrigin(0.5);
         status.setName('starter-status');
         this.starterStatusText = status;
 
-        // TIME LEFT pill below the card (reference: outside the card body).
         const pillW = 220 * s;
         const pillY = top + popH + 26 * s;
         const pill = this.add.graphics();
@@ -1619,11 +1845,12 @@ export class LevelSelectionScene extends Scene {
         pill.moveTo(cx - 78 * s, pillY);
         pill.lineTo(cx - 73 * s, pillY + 2 * s);
         pill.strokePath();
-        const timeLabel = this.add.text(cx - 58 * s, pillY, 'TIME LEFT', {
-            fontFamily: FONT_DISPLAY, fontSize: `${Math.round(13 * s)}px`, color: '#1e3a5f',
+        const timeLabel = this.add.text(cx - 74 * s, pillY, 'RESET IN:', {
+            fontFamily: FONT_DISPLAY, fontSize: `${Math.round(12 * s)}px`, color: '#1e3a5f',
         }).setOrigin(0, 0.5);
-        const timeText = this.add.text(cx + 26 * s, pillY, formatOfferCountdown(starterPackRemainingMs()), {
-            fontFamily: FONT_DISPLAY, fontSize: `${Math.round(16 * s)}px`, color: '#1e3a5f',
+        timeLabel.setName('starter-reset-label');
+        const timeText = this.add.text(cx + 24 * s, pillY, formatOfferCountdown(starterState.remainingMs), {
+            fontFamily: FONT_DISPLAY, fontSize: `${Math.round(15 * s)}px`, color: '#1e3a5f',
         }).setOrigin(0, 0.5);
         timeText.setName('starter-countdown');
         this.starterTimeText = timeText;
@@ -1650,8 +1877,9 @@ export class LevelSelectionScene extends Scene {
         closeIcon.lineTo(closeX - closeArm, closeY + closeArm);
         closeIcon.strokePath();
         const closeHit = this.add.circle(closeX, closeY, Math.round(18 * closeS), 0xffffff, 0.001).setInteractive({ useHandCursor: true });
-        closeHit.on('pointerdown', (_pointer: Phaser.Input.Pointer, _lx: number, _ly: number, event: Phaser.Types.Input.EventData) => {
+        closeHit.on('pointerdown', (pointer: Phaser.Input.Pointer, _lx: number, _ly: number, event: Phaser.Types.Input.EventData) => {
             event.stopPropagation();
+            suppressPointerRelease(pointer.id);
             if (this.starterScroll?.moved) {
                 return;
             }
@@ -1663,7 +1891,9 @@ export class LevelSelectionScene extends Scene {
         blocker.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: Phaser.Types.Input.EventData) => {
             event.stopPropagation();
         });
-        dim.on('pointerdown', () => {
+        dim.on('pointerdown', (pointer: Phaser.Input.Pointer, _lx: number, _ly: number, event: Phaser.Types.Input.EventData) => {
+            event.stopPropagation();
+            suppressPointerRelease(pointer.id);
             this.hideStarterPackPopup();
         });
 
@@ -1730,15 +1960,14 @@ export class LevelSelectionScene extends Scene {
             this.starterScroll = scroll;
         }
         this.starterPopup = popup;
-        this.starterBuyDisabled = isStarterPackExpired();
+        this.starterBuyDisabled = starterState.purchased;
         if (this.starterBuyDisabled) {
             drawBuy();
-            buyText.setText('EXPIRED');
-            status.setText('This offer has expired.');
+            buyText.setText('PURCHASED');
+            status.setText('Already claimed. New offer after reset.');
         }
+        void this.refreshStarterPrices();
         gameAudio.playSfx('popupOpen');
-        // The 1s offer clock started in create() is always running; it
-        // updates these texts live whether the popup is open or not.
     }
 
     private hideStarterPackPopup(): void {
@@ -1755,12 +1984,16 @@ export class LevelSelectionScene extends Scene {
             scroll.mask.destroy();
             this.starterScroll = null;
         }
-        this.starterGeometry = null;
-        // Keep the offer clock running after close; only UI refs clear.
         this.starterTimeText = null;
         this.starterBuyText = null;
-        this.starterBuyBg = null;
+        this.starterBuyRedraw = null;
         this.starterStatusText = null;
+        this.starterOfferText = null;
+        this.starterPriceText = null;
+        this.starterDiscountText = null;
+        this.starterLocalizedPrices = new Map();
+        this.starterActiveOffer = null;
+        this.starterCycleIndex = -1;
         this.starterBuyDisabled = false;
         this.starterPurchasing = false;
         releaseModalInputLock('starter-pack');
@@ -1769,36 +2002,36 @@ export class LevelSelectionScene extends Scene {
     }
 
     private tickStarterPack(): void {
-        const remaining = starterPackRemainingMs();
-        this.starterTimeText?.setText(formatOfferCountdown(remaining));
-        if (remaining <= 0) {
-            this.starterBuyDisabled = true;
-            this.starterBuyText?.setText('EXPIRED');
-            this.starterStatusText?.setText('This offer has expired.');
-            this.starterBuyBg?.clear();
-            const width = worldWidth();
-            const height = worldHeight();
-            const geometry = this.starterGeometry ?? starterPopupGeometry(width, height);
-            const s = geometry.scale;
-            const cy = height / 2 - 24 * s;
-            const popH = geometry.height;
-            const buyS = s;
-            const buyW = Math.round(200 * buyS);
-            const buyH = Math.round(48 * buyS);
-            const artworkH = Math.max(110 * s, geometry.designHeight - 64 * s - 192 * s);
-            const buyY = cy - popH / 2 + 64 * s + artworkH + 104 * s;
-            const g = this.starterBuyBg;
-            if (g) {
-                g.fillStyle(0x020617, 0.35);
-                g.fillRoundedRect(width / 2 - buyW / 2, buyY - buyH / 2 + 3 * buyS, buyW, buyH, 12 * buyS);
-                g.fillStyle(0x94a3b8, 1);
-                g.fillRoundedRect(width / 2 - buyW / 2, buyY - buyH / 2, buyW, buyH, 12 * buyS);
-                g.fillStyle(0xffffff, 0.22);
-                g.fillRoundedRect(width / 2 - buyW / 2 + 10 * buyS, buyY - buyH / 2 + 5 * buyS, buyW - 20 * buyS, 12 * buyS, 6 * buyS);
-                g.lineStyle(2, 0xffffff, 0.95);
-                g.strokeRoundedRect(width / 2 - buyW / 2, buyY - buyH / 2, buyW, buyH, 12 * buyS);
-            }
+        const state = getStarterPackState();
+        this.starterTimeText?.setText(formatOfferCountdown(state.remainingMs));
+        if (this.starterPopup && state.cycleIndex !== this.starterCycleIndex && !this.starterPurchasing) {
+            this.applyStarterPackState(state);
         }
+    }
+
+    private applyStarterPackState(state: StarterPackState): void {
+        this.starterActiveOffer = state.offer;
+        this.starterCycleIndex = state.cycleIndex;
+        this.starterBuyDisabled = state.purchased;
+        this.starterOfferText?.setText(`GET ${state.offer.coins.toLocaleString('en-US')} COINS`);
+        this.starterPriceText?.setText(`ONLY FOR ${this.starterPriceLabel(state.offer)}`);
+        this.starterDiscountText?.setText(`${state.offer.discountPercent}%`);
+        this.starterBuyRedraw?.();
+        this.starterBuyText?.setText(state.purchased ? 'PURCHASED' : 'BUY NOW!');
+        this.starterStatusText?.setText(state.purchased ? 'Already claimed. New offer after reset.' : '');
+    }
+
+    private starterPriceLabel(offer: StarterPackOffer): string {
+        return this.starterLocalizedPrices.get(offer.sku)?.displayPrice ?? starterPackProduct(offer).usdPrice;
+    }
+
+    private async refreshStarterPrices(): Promise<void> {
+        const prices = await queryLocalizedPrices();
+        if (!this.starterPopup || this.starterPurchasing || prices.size === 0) {
+            return;
+        }
+        this.starterLocalizedPrices = prices;
+        this.applyStarterPackState(getStarterPackState());
     }
 
     private setStarterStatus(message: string): void {
@@ -1806,21 +2039,17 @@ export class LevelSelectionScene extends Scene {
     }
 
     private async buyStarterPack(): Promise<void> {
-        if (!this.starterPopup || this.starterBuyDisabled || this.starterPurchasing) {
+        const state = getStarterPackState();
+        if (!this.starterPopup || !isStarterUnlocked(this.progress) || state.purchased || this.starterBuyDisabled || this.starterPurchasing) {
             return;
         }
-        if (isStarterPackExpired()) {
-            this.tickStarterPack();
+        if (!this.starterActiveOffer || state.cycleIndex !== this.starterCycleIndex || state.offer.id !== this.starterActiveOffer.id) {
+            this.applyStarterPackState(state);
             return;
         }
-        const product: RealMoneyProduct = {
-            id: 'starter-pack-offer',
-            sku: 'starter_pack_30_coins',
-            name: STARTER_PACK_TITLE,
-            coins: STARTER_PACK_COINS,
-            grants: {},
-            usdPrice: STARTER_PACK_PRICE_BDT,
-        };
+
+        const product: RealMoneyProduct = starterPackProduct(this.starterActiveOffer);
+        const expectedCycle = this.starterCycleIndex;
         this.starterPurchasing = true;
         this.setStarterStatus('Processing…');
         const outcome = await requestPurchase(product);
@@ -1835,6 +2064,11 @@ export class LevelSelectionScene extends Scene {
         }
         if (outcome.status === 'cancelled') {
             this.setStarterStatus('Purchase cancelled. No charge was made.');
+            this.starterPurchasing = false;
+            return;
+        }
+        if (outcome.status === 'pending') {
+            this.setStarterStatus(outcome.reason ?? 'Payment is pending. No rewards were granted.');
             this.starterPurchasing = false;
             return;
         }
@@ -1854,88 +2088,271 @@ export class LevelSelectionScene extends Scene {
             this.starterPurchasing = false;
             return;
         }
+        if (!markStarterPackPurchased(expectedCycle)) {
+            this.applyStarterPackState(getStarterPackState());
+            this.setStarterStatus('Offer changed before the purchase completed. No reward was granted.');
+            this.starterPurchasing = false;
+            return;
+        }
+
         markTransactionProcessed(outcome.transactionId, product.id);
+        void finalizePurchase(outcome.transactionId, outcome.receipt);
         addCoins(product.coins);
+        const rewards = [`+${product.coins} Coins`];
+        for (const [power, amount] of Object.entries(product.grants) as Array<[keyof typeof product.grants, number]>) {
+            if (amount > 0) {
+                grantPowerUp(power, amount);
+                rewards.push(`+${amount} ${power}`);
+            }
+        }
         gameAudio.playSfx('purchase');
         this.progress = loadProgress();
         this.refreshHud();
-        this.setStarterStatus(`Purchase successful! +${product.coins} Coins. Balance: ${this.progress.coins.toLocaleString('en-US')} Coins.`);
+        this.starterBuyDisabled = true;
+        this.starterBuyRedraw?.();
+        this.starterBuyText?.setText('PURCHASED');
+        this.setStarterStatus(`Purchase successful! ${rewards.join(' · ')}. Balance: ${this.progress.coins.toLocaleString('en-US')} Coins.`);
         this.starterPurchasing = false;
     }
 
     private toggleInfo(): void {
         if (this.infoPanel) {
             gameAudio.playSfx('popupClose');
+            this.removeInfoScroll();
             this.infoPanel.destroy(true);
             this.infoPanel = null;
             return;
         }
 
-        const panel = this.add.container(0, 0).setDepth(60);
+        acquireModalInputLock('how-to-play');
+        const width = worldWidth();
+        const height = worldHeight();
+        const layout = howToPlayLayout(width, height);
+        const s = layout.scale;
+        const left = layout.panelX - layout.panelW / 2;
+        const top = layout.panelY;
+
+        const panel = this.add.container(0, 0).setDepth(60).setName('how-to-play-popup');
         const dim = this.add
-            .rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, 0x020617, 0.72)
+            .rectangle(width / 2, height / 2, width, height, 0x020617, 0.72)
             .setInteractive();
+        dim.on('pointerdown', (pointer: Phaser.Input.Pointer, _lx: number, _ly: number, event: Phaser.Types.Input.EventData) => {
+            event.stopPropagation();
+            suppressPointerRelease(pointer.id);
+            this.toggleInfo();
+        });
+
         const card = this.add.graphics();
         card.fillStyle(0x1e1b4b, 0.97);
-        card.fillRoundedRect(36, 220, GAME_WIDTH - 72, 390, 22);
+        card.fillRoundedRect(left, top, layout.panelW, layout.panelH, 22);
         card.lineStyle(2, 0xa855f7, 0.95);
-        card.strokeRoundedRect(36, 220, GAME_WIDTH - 72, 390, 22);
+        card.strokeRoundedRect(left, top, layout.panelW, layout.panelH, 22);
+        card.fillStyle(0xfde68a, 0.9);
+        card.fillRoundedRect(
+            left + 18 * s,
+            top + (HOW_TO_TITLE_HEIGHT - 8) * s,
+            layout.panelW - 36 * s,
+            2,
+            1
+        );
 
-        const heading = this.add
-            .text(GAME_WIDTH / 2, 258, 'WORLD MAP', {
+        const title = this.add
+            .text(layout.panelX, top + 30 * s, HOW_TO_TITLE, {
                 fontFamily: FONT_DISPLAY,
-                fontSize: '22px',
+                fontSize: `${Math.round(22 * s)}px`,
                 color: '#fde68a',
             })
             .setOrigin(0.5);
-        const body = this.add
-            .text(
-                GAME_WIDTH / 2,
-                400,
-                [
-                    'A thousand stops wind along this snake of a path.',
-                    'Only the first stop is open on a fresh save; each',
-                    'victory unlocks the next number — failing keeps it locked.',
-                    '',
-                    'Completed stops show their stars and can be replayed.',
-                    'Progress is saved in this browser and restored on refresh.',
-                ].join('\n'),
-                {
-                    fontFamily: FONT,
-                    fontSize: '13px',
-                    color: '#e9d5ff',
-                    align: 'center',
-                    wordWrap: { width: GAME_WIDTH - 120 },
-                    lineSpacing: 6,
-                }
-            )
-            .setOrigin(0.5);
 
-        const closeFont = this.mobileUi ? `${Math.round(19 * this.mobileScale)}px` : '16px';
-        const close = this.add
-            .text(GAME_WIDTH / 2, 560, 'CLOSE', {
+        const content = this.add.container(0, 0);
+        let y = layout.contentTop;
+        const textX = left + 54 * s;
+        const wrapW = layout.panelW - 84 * s;
+
+        HOW_TO_SECTIONS.forEach((section) => {
+            const icon = this.add.graphics();
+            this.drawHowToIcon(icon, section.icon, left + 28 * s, y + 8 * s, s);
+            content.add(icon);
+            const heading = this.add
+                .text(textX, y, `${section.number} ${section.title}`, {
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: `${Math.round(15 * s)}px`,
+                    color: '#fde68a',
+                })
+                .setOrigin(0, 0);
+            content.add(heading);
+            y += (15 + 10) * s;
+
+            section.lines.forEach((line) => {
+                const body = this.add
+                    .text(textX, y, line, {
+                        fontFamily: FONT,
+                        fontSize: `${Math.round(12.5 * s)}px`,
+                        color: '#e9d5ff',
+                        wordWrap: { width: wrapW },
+                        lineSpacing: 3 * s,
+                    })
+                    .setOrigin(0, 0);
+                content.add(body);
+                y += body.height + 4 * s;
+            });
+            y += HOW_TO_SECTION_GAP * s;
+        });
+
+        const closing = this.add
+            .text(layout.panelX, y + 8 * s, HOW_TO_CLOSING, {
                 fontFamily: FONT_DISPLAY,
-                fontSize: closeFont,
+                fontSize: `${Math.round(14 * s)}px`,
+                color: '#86efac',
+                align: 'center',
+                wordWrap: { width: layout.panelW - 48 * s },
+            })
+            .setOrigin(0.5, 0);
+        content.add(closing);
+        const contentBottom = y + closing.height + 10 * s;
+
+        const closeY = top + layout.panelH - (HOW_TO_FOOTER_HEIGHT / 2) * s;
+        const close = this.add
+            .text(layout.panelX, closeY, 'CLOSE', {
+                fontFamily: FONT_DISPLAY,
+                fontSize: `${Math.round(16 * s)}px`,
                 color: '#86efac',
             })
             .setOrigin(0.5);
         const closeHit = this.add
             .rectangle(
-                GAME_WIDTH / 2,
-                560,
-                Math.round((this.mobileUi ? 140 : 100) * this.mobileScale),
-                Math.round((this.mobileUi ? 44 : 32) * this.mobileScale),
+                layout.panelX,
+                closeY,
+                Math.round(140 * s),
+                Math.round(44 * s),
                 0xffffff,
                 0.001
             )
             .setInteractive({ useHandCursor: true });
+        closeHit.on(
+            'pointerdown',
+            (
+                pointer: Phaser.Input.Pointer,
+                _lx: number,
+                _ly: number,
+                event: Phaser.Types.Input.EventData
+            ) => {
+                event.stopPropagation();
+                suppressPointerRelease(pointer.id);
+                this.toggleInfo();
+            }
+        );
 
-        closeHit.on('pointerdown', () => this.toggleInfo());
-        dim.on('pointerdown', () => this.toggleInfo());
-        panel.add([dim, card, heading, body, close, closeHit]);
+        panel.add([dim, card, title, content, close, closeHit]);
         this.infoPanel = panel;
         gameAudio.playSfx('popupOpen');
         addPressFx(this, closeHit, close, { hoverScale: 1.06, pressScale: 0.94 });
+
+        const innerHeight = contentBottom - layout.contentTop;
+        if (innerHeight > layout.contentH) {
+            const mask = this.make.graphics({ x: 0, y: 0 }, false);
+            mask.fillStyle(0xffffff, 1);
+            mask.fillRoundedRect(
+                left + 8,
+                layout.contentTop - 6,
+                layout.panelW - 16,
+                layout.contentH + 12,
+                8
+            );
+            content.setMask(mask.createGeometryMask());
+            const inContent = (pointer: Phaser.Input.Pointer): boolean =>
+                pointer.x >= left && pointer.x <= left + layout.panelW &&
+                pointer.y >= layout.contentTop && pointer.y <= layout.contentTop + layout.contentH;
+            const scroll = {
+                layer: content,
+                mask,
+                min: -(innerHeight - layout.contentH),
+                y: 0,
+                dragging: false,
+                startY: 0,
+                startScroll: 0,
+                top: layout.contentTop,
+                bottom: layout.contentTop + layout.contentH,
+                down: (pointer: Phaser.Input.Pointer): void => {
+                    if (!this.infoPanel || !inContent(pointer)) return;
+                    scroll.dragging = true;
+                    scroll.startY = pointer.y;
+                    scroll.startScroll = scroll.y;
+                },
+                move: (pointer: Phaser.Input.Pointer): void => {
+                    if (!scroll.dragging) return;
+                    scroll.y = Math.max(scroll.min, Math.min(0, scroll.startScroll + (pointer.y - scroll.startY)));
+                    scroll.layer.y = scroll.y;
+                },
+                up: (): void => {
+                    scroll.dragging = false;
+                },
+                wheel: (pointer: Phaser.Input.Pointer, _over: Phaser.GameObjects.GameObject[], _dx: number, deltaY: number): void => {
+                    if (!this.infoPanel || !inContent(pointer)) return;
+                    scroll.y = Math.max(scroll.min, Math.min(0, scroll.y - deltaY * 0.5));
+                    scroll.layer.y = scroll.y;
+                },
+            };
+            this.input.on('pointerdown', scroll.down);
+            this.input.on('pointermove', scroll.move);
+            this.input.on('pointerup', scroll.up);
+            this.input.on('pointerupoutside', scroll.up);
+            this.input.on('wheel', scroll.wheel);
+            this.infoScroll = scroll;
+        }
+    }
+
+    private removeInfoScroll(): void {
+        releaseModalInputLock('how-to-play');
+        const scroll = this.infoScroll;
+        if (!scroll) {
+            return;
+        }
+        this.input.off('pointerdown', scroll.down);
+        this.input.off('pointermove', scroll.move);
+        this.input.off('pointerup', scroll.up);
+        this.input.off('pointerupoutside', scroll.up);
+        this.input.off('wheel', scroll.wheel);
+        if (scroll.mask.active) {
+            scroll.mask.destroy();
+        }
+        this.infoScroll = null;
+    }
+
+    private drawHowToIcon(
+        graphics: Phaser.GameObjects.Graphics,
+        kind: HowToIcon,
+        x: number,
+        y: number,
+        s: number
+    ): void {
+        if (kind === 'target') {
+            graphics.lineStyle(2 * s, 0xfde68a, 1);
+            graphics.strokeCircle(x, y, 9 * s);
+            graphics.fillStyle(0xffc928, 1);
+            graphics.fillCircle(x, y, 4 * s);
+        } else if (kind === 'shoot') {
+            graphics.fillStyle(0x4fc8f5, 1);
+            graphics.fillTriangle(x - 6 * s, y - 8 * s, x - 6 * s, y + 8 * s, x + 9 * s, y);
+        } else if (kind === 'star') {
+            graphics.fillStyle(0xffc928, 1);
+            graphics.fillCircle(x, y, 9 * s);
+            graphics.fillStyle(0xfff1a8, 1);
+            graphics.fillTriangle(x, y - 7 * s, x - 3 * s, y - 1 * s, x + 3 * s, y - 1 * s);
+        } else if (kind === 'power') {
+            graphics.fillStyle(0xff8d1f, 1);
+            graphics.fillTriangle(x - 7 * s, y + 6 * s, x + 7 * s, y + 6 * s, x, y - 9 * s);
+            graphics.fillStyle(0xffe38a, 1);
+            graphics.fillCircle(x, y + 3 * s, 3 * s);
+        } else if (kind === 'coins') {
+            graphics.fillStyle(0xffc928, 1);
+            graphics.fillEllipse(x - 4 * s, y + 3 * s, 12 * s, 8 * s);
+            graphics.fillEllipse(x + 4 * s, y - 3 * s, 12 * s, 8 * s);
+        } else {
+            graphics.fillStyle(0xa855f7, 1);
+            graphics.fillRect(x - 6 * s, y - 8 * s, 3 * s, 16 * s);
+            graphics.fillTriangle(x - 3 * s, y - 8 * s, x + 9 * s, y - 2 * s, x - 3 * s, y + 4 * s);
+        }
     }
 }
 

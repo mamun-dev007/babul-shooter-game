@@ -3,6 +3,10 @@ import {
     resolveLevelProgressState,
     resolveLevelStars,
     suggestedLevelIndex,
+    completedLevelCount,
+    isStarterUnlocked,
+    STARTER_UNLOCK_LEVEL_COUNT,
+    STARTER_UNLOCK_TEXT,
 } from './progress';
 
 describe('level progress resolver', () => {
@@ -65,5 +69,35 @@ describe('level progress resolver', () => {
 
         expect(suggestedLevelIndex(100, progress)).toBe(99);
         expect(suggestedLevelIndex(0, progress)).toBe(0);
+    });
+});
+
+describe('starter unlock from completed levels', () => {
+    const completed = (count: number) =>
+        Array.from({ length: count }, (_, index) => index);
+
+    it('counts unique completed levels, ignoring replays and unlocked-only levels', () => {
+        expect(completedLevelCount({})).toBe(0);
+        expect(completedLevelCount({ highestLevel: 19, completedLevels: [0] })).toBe(1);
+        expect(completedLevelCount({ completedLevels: [...completed(20), 0, 0] })).toBe(20);
+        expect(completedLevelCount({ stars: { 0: 3, 4: 2, 9: 0 } })).toBe(2);
+    });
+
+    it('stays locked through 19 completed levels', () => {
+        expect(STARTER_UNLOCK_LEVEL_COUNT).toBe(20);
+        expect(STARTER_UNLOCK_TEXT).toBe('Unlock 20 Levels');
+        expect(isStarterUnlocked({ completedLevels: completed(0) })).toBe(false);
+        expect(isStarterUnlocked({ completedLevels: completed(18) })).toBe(false);
+        expect(isStarterUnlocked({ completedLevels: completed(19) })).toBe(false);
+    });
+
+    it('unlocks exactly at 20 completed levels and stays unlocked afterwards', () => {
+        expect(isStarterUnlocked({ completedLevels: completed(20) })).toBe(true);
+        expect(isStarterUnlocked({ completedLevels: completed(25) })).toBe(true);
+    });
+
+    it('does not unlock just because level 20 is available or visited', () => {
+        expect(isStarterUnlocked({ highestLevel: 19 })).toBe(false);
+        expect(isStarterUnlocked({ highestLevel: 20, completedLevels: [19] })).toBe(false);
     });
 });

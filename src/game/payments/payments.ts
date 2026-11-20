@@ -3,17 +3,15 @@ import { REAL_MONEY_PRODUCTS, type RealMoneyProduct } from '../store/realMoneyCa
 /**
  * Real-money payment seam (mirrors the rewarded-ads provider pattern).
  *
- * No payment provider is configured in this build: Google Play Billing /
- * Apple StoreKit / a web provider plus a secure verification backend must
- * be registered (see config.ts) before any real-money purchase can run.
- * Until then every purchase attempt resolves `unavailable` and grants
- * nothing — purchases are never simulated and rewards are never granted
- * on a bare BUY click.
+ * Platform providers are registered at boot (see config.ts). No provider is
+ * ever simulated: on web every purchase resolves `unavailable` and grants
+ * nothing. Rewards require a verified transaction and a fresh ledger entry.
  */
 
 export type PaymentOutcome =
     | { status: 'granted'; transactionId: string; platform: string; receipt: string }
     | { status: 'cancelled'; reason?: string }
+    | { status: 'pending'; reason?: string }
     | { status: 'failed'; reason?: string }
     | { status: 'unavailable'; reason?: string };
 
@@ -25,9 +23,26 @@ export interface LocalizedPrice {
 
 export interface PaymentProvider {
     readonly id: string;
+    readonly unavailableReason?: () => string;
     isConfigured(): boolean;
     queryProducts(productIds: string[]): Promise<Map<string, LocalizedPrice>>;
     purchase(sku: string): Promise<PaymentOutcome>;
+    /** Platform-side verification used when no verification backend is set. */
+    verify?(product: RealMoneyProduct, transactionId: string, receipt: string): Promise<{ verified: boolean; reason?: string }>;
+    /** Finalizes (e.g. consumes) a purchase after rewards were granted. */
+    finalize?(transactionId: string, receipt: string): Promise<void>;
+}
+
+export async function finalizePurchase(transactionId: string, receipt: string): Promise<void> {
+    if (!isPaymentAvailable() || !provider?.finalize) {
+        return;
+    }
+
+    try {
+        await provider.finalize(transactionId, receipt);
+    } catch {
+        // Rewards stay safe in the ledger; a retry is handled by the store.
+    }
 }
 
 let provider: PaymentProvider | null = null;
@@ -60,12 +75,26 @@ export async function queryLocalizedPrices(): Promise<Map<string, LocalizedPrice
     }
 }
 
+export function missingProductReason(sku: string): string {
+    return `The store could not find product "${sku}". Confirm this exact SKU is active for this app in Google Play Console, then reinstall the app from the Play testing track.`;
+}
+
 export async function requestPurchase(product: RealMoneyProduct): Promise<PaymentOutcome> {
-    if (!isPaymentAvailable() || !provider) {
+    if (!provider) {
         return { status: 'unavailable', reason: 'Store payments are not configured yet.' };
+    }
+    if (!provider.isConfigured()) {
+        return {
+            status: 'unavailable',
+            reason: provider.unavailableReason?.() ?? 'Store payments are not available here.',
+        };
     }
 
     try {
+        const prices = await provider.queryProducts([product.sku]);
+        if (!prices.has(product.sku)) {
+            return { status: 'failed', reason: missingProductReason(product.sku) };
+        }
         return await provider.purchase(product.sku);
     } catch {
         return { status: 'failed', reason: 'Payment could not be completed.' };
@@ -90,6 +119,9 @@ export async function verifyTransaction(
 ): Promise<{ verified: boolean; reason?: string }> {
     const endpoint = verificationEndpoint();
     if (!endpoint) {
+        if (isPaymentAvailable() && provider?.verify) {
+            return provider.verify(product, transactionId, receipt);
+        }
         return { verified: false, reason: 'Backend verification is not configured.' };
     }
 

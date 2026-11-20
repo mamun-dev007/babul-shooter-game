@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import { clearPointerSuppression, isPointerReleaseSuppressed, suppressPointerRelease } from '../input/modalInputLock';
 import { FONT, FONT_DISPLAY, GAME_HEIGHT, GAME_WIDTH } from '../config';
 import { loadProgress } from '../utils/storage';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
@@ -469,7 +470,8 @@ export class GiftItemsScene extends Scene {
         buyText.setName(`claim-${gift.id}`);
         const buyHit = this.add.rectangle(0, buyY, buyW, 30 * s, 0xffffff, 0.001).setInteractive({ useHandCursor: true });
         buyHit.setData('claimGift', gift.id);
-        buyHit.on('pointerup', () => {
+        buyHit.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+            if (isPointerReleaseSuppressed(pointer.id)) return;
             if (!this.dragMoved) {
                 void this.claimGiftHandler(gift);
             }
@@ -550,7 +552,8 @@ export class GiftItemsScene extends Scene {
         body.setName('lucky-reward');
         const collect = this.add.text(cardX, cardY + 66, 'COLLECT', { fontFamily: FONT_DISPLAY, fontSize: '18px', color: '#ffffff', backgroundColor: '#22c55e', padding: { x: 30, y: 10 } }).setOrigin(0.5).setInteractive({ useHandCursor: true });
         collect.setName('lucky-collect');
-        collect.on('pointerdown', () => {
+        collect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            suppressPointerRelease(pointer.id);
             const paid = grantGiftReward(gift, reward);
             if (paid) {
                 gameAudio.playSfx('coin');
@@ -564,6 +567,8 @@ export class GiftItemsScene extends Scene {
     }
 
     private bindScrollInput(): void {
+        this.input.on('pointerup', this.onAnyPointerUp, this);
+        this.input.on('pointerupoutside', this.onAnyPointerUp, this);
         this.input.on('pointerdown', this.onScrollDown, this);
         this.input.on('pointermove', this.onScrollMove, this);
         this.input.on('pointerup', this.onScrollUp, this);
@@ -573,6 +578,10 @@ export class GiftItemsScene extends Scene {
 
     private inList(pointer: Phaser.Input.Pointer): boolean {
         return pointer.y >= SCROLL_TOP && pointer.y <= worldHeight();
+    }
+
+    private onAnyPointerUp(pointer: Phaser.Input.Pointer): void {
+        clearPointerSuppression(pointer.id);
     }
 
     private onScrollDown(pointer: Phaser.Input.Pointer): void {
@@ -644,7 +653,10 @@ export class GiftItemsScene extends Scene {
         const body = this.add.text(cardX, cardY - 10, bodyText, { fontFamily: FONT, fontSize: '16px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 2, align: 'center', lineSpacing: 6 }).setOrigin(0.5);
         const ok = this.add.text(cardX, cardY + 66, 'OK', { fontFamily: FONT_DISPLAY, fontSize: '18px', color: '#ffffff', backgroundColor: '#22c55e', padding: { x: 36, y: 10 } }).setOrigin(0.5).setInteractive({ useHandCursor: true });
         ok.setName('popup-ok');
-        const close = (): void => this.dismissPopup();
+        const close = (pointer: Phaser.Input.Pointer): void => {
+            suppressPointerRelease(pointer.id);
+            this.dismissPopup();
+        };
         ok.on('pointerdown', close);
         dim.on('pointerdown', close);
         layer.add([dim, card, title, body, ok]);

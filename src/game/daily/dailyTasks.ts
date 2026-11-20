@@ -8,8 +8,9 @@ import { recordCollectedCard } from '../collected/collected';
  *
  * Every objective below is a new gameplay requirement; none of the previous
  * easy missions (play N levels, fire N power-ups, "champion" meta-goal) remain.
- * Progress is stored under an Asia/Dhaka (UTC+6) calendar day with a
- * high-water mark so a backwards device clock cannot replay an earlier day.
+ * Progress is stored in rolling 24-hour cycles anchored to a persisted
+ * timestamp, with a high-water mark so a backwards clock cannot replay an
+ * earlier cycle.
  *
  * Missions flagged `perLevel` count each level id at most once, so replaying
  * the same level can never satisfy them twice — this is what makes
@@ -48,21 +49,24 @@ export interface DailyMission {
 }
 
 export const DAILY_MISSIONS: readonly DailyMission[] = [
-    { id: 'five-different-levels', title: 'Trail Blazer', description: 'Complete 5 different levels', target: 5, reward: 30, icon: 'target', event: 'completeLevel', perLevel: true },
-    { id: 'clear-150-bubbles', title: 'Bubble Storm', description: 'Clear 150 bubbles in total', target: 150, reward: 25, icon: 'bomb', event: 'bubblesCleared' },
-    { id: 'three-no-power', title: 'Purist', description: 'Complete 3 levels without using power-ups', target: 3, reward: 35, icon: 'champion', event: 'cleanLevel', perLevel: true },
-    { id: 'forty-streak', title: 'Steady Hand', description: 'Clear 40 bubbles with consecutive successful shots', target: 40, reward: 35, icon: 'play', event: 'streakBubbles' },
-    { id: 'two-efficient', title: 'Sharp Shooter', description: `Complete 2 levels in ${EFFICIENT_SHOT_LIMIT} shots or fewer`, target: 2, reward: 40, icon: 'target', event: 'efficientLevel', perLevel: true },
-    { id: 'fire-bubbles', title: 'Flame Master', description: 'Clear 25 bubbles with Fire power', target: 25, reward: 30, icon: 'fire', event: 'fireBubbles' },
-    { id: 'bomb-bubbles', title: 'Demolition', description: 'Destroy 20 bubbles with Bomb power', target: 20, reward: 30, icon: 'bomb', event: 'bombBubbles' },
-    { id: 'three-two-stars', title: 'High Flyer', description: 'Complete 3 levels with at least 2 stars', target: 3, reward: 40, icon: 'champion', event: 'starLevel', perLevel: true },
-    { id: 'chain-reactions', title: 'Chain Reactor', description: 'Clear 20 bubbles from big chain reactions', target: 20, reward: 35, icon: 'bomb', event: 'chainBubbles' },
+    { id: 'five-different-levels', title: 'Trail Blazer', description: 'Complete 20 different levels', target: 20, reward: 10, icon: 'target', event: 'completeLevel', perLevel: true },
+    { id: 'clear-150-bubbles', title: 'Bubble Storm', description: 'Clear 300 bubbles in total', target: 1000, reward: 9, icon: 'bomb', event: 'bubblesCleared' },
+    { id: 'three-no-power', title: 'Purist', description: 'Complete 8 levels without using power-ups', target: 8, reward: 15, icon: 'champion', event: 'cleanLevel', perLevel: true },
+    { id: 'forty-streak', title: 'Steady Hand', description: 'Clear 200 bubbles with consecutive successful shots', target: 2000, reward: 20, icon: 'play', event: 'streakBubbles' },
+    { id: 'two-efficient', title: 'Sharp Shooter', description: `Complete 9 levels in ${EFFICIENT_SHOT_LIMIT} shots or fewer`, target: 9, reward: 15, icon: 'target', event: 'efficientLevel', perLevel: true },
+    { id: 'fire-bubbles', title: 'Flame Master', description: 'Clear 200 bubbles with Fire power', target: 200, reward: 12, icon: 'fire', event: 'fireBubbles' },
+    { id: 'bomb-bubbles', title: 'Demolition', description: 'Destroy 400 bubbles with Bomb power', target: 400, reward: 10, icon: 'bomb', event: 'bombBubbles' },
+    { id: 'three-two-stars', title: 'High Flyer', description: 'Complete 15 levels with at least 3 stars', target: 15, reward: 25, icon: 'champion', event: 'starLevel', perLevel: true },
+    { id: 'chain-reactions', title: 'Chain Reactor', description: 'Clear 5000 bubbles from big chain reactions', target: 5000, reward: 30, icon: 'bomb', event: 'chainBubbles' },
 ] as const;
 
 export const DAILY_REWARD_TOTAL = DAILY_MISSIONS.reduce((sum, mission) => sum + mission.reward, 0);
 
 export interface DailyProgress {
+    /** Display label for the cycle start (Asia/Dhaka, UTC+6). */
     day: string;
+    /** Epoch ms marking the start of the current rolling 24-hour cycle. */
+    cycleStart: number;
     progress: Record<string, number>;
     claimed: string[];
     /** Distinct level ids already counted toward `perLevel` missions. */
@@ -70,6 +74,8 @@ export interface DailyProgress {
 }
 
 const STORAGE_KEY = 'bubble-shooter-daily.v2';
+/** One full daily cycle, independent of calendar days or time zones. */
+export const DAILY_RESET_MS = 24 * 60 * 60 * 1000;
 
 /** Asia/Dhaka is UTC+6 with no daylight-saving changes. */
 export const dhakaDayString = (now: Date = new Date()): string => {
@@ -77,11 +83,11 @@ export const dhakaDayString = (now: Date = new Date()): string => {
     return dhaka.toISOString().slice(0, 10);
 };
 
-/** Milliseconds until the next Dhaka midnight. */
-export const dhakaCountdownMs = (now: Date = new Date()): number => {
-    const dayStartUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - 6 * 60 * 60 * 1000;
-    const nextMidnight = dayStartUtc + 24 * 60 * 60 * 1000;
-    return Math.max(0, nextMidnight - now.getTime());
+/** Milliseconds left in the current 24-hour cycle. */
+export const dailyResetCountdownMs = (now: Date = new Date()): number => {
+    const state = loadDailyProgress(now);
+    const elapsed = Math.max(0, now.getTime() - state.cycleStart);
+    return Math.max(0, DAILY_RESET_MS - elapsed);
 };
 
 export const formatCountdown = (remainingMs: number): string => {
@@ -92,7 +98,13 @@ export const formatCountdown = (remainingMs: number): string => {
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
-const emptyProgress = (day: string): DailyProgress => ({ day, progress: {}, claimed: [], levels: {} });
+const emptyProgress = (cycleStart: number): DailyProgress => ({
+    day: dhakaDayString(new Date(cycleStart)),
+    cycleStart,
+    progress: {},
+    claimed: [],
+    levels: {},
+});
 
 function readStored(): DailyProgress | null {
     try {
@@ -103,6 +115,13 @@ function readStored(): DailyProgress | null {
 
         const parsed = JSON.parse(raw) as Partial<DailyProgress>;
         if (!parsed || typeof parsed.day !== 'string' || !parsed.progress) {
+            return null;
+        }
+
+        const cycleStart = Number.isFinite(parsed.cycleStart)
+            ? Number(parsed.cycleStart)
+            : Date.parse(`${parsed.day}T00:00:00+06:00`);
+        if (!Number.isFinite(cycleStart)) {
             return null;
         }
 
@@ -117,6 +136,7 @@ function readStored(): DailyProgress | null {
 
         return {
             day: parsed.day,
+            cycleStart,
             progress: { ...parsed.progress },
             claimed: Array.isArray(parsed.claimed) ? [...parsed.claimed] : [],
             levels,
@@ -134,48 +154,53 @@ function persist(state: DailyProgress): void {
     }
 }
 
-function highWaterDay(): string {
+function highWaterStart(): number {
     try {
-        return localStorage.getItem(`${STORAGE_KEY}.high-water`) ?? '';
+        const value = Number(localStorage.getItem(`${STORAGE_KEY}.high-water`));
+        return Number.isFinite(value) ? value : 0;
     } catch {
-        return '';
+        return 0;
     }
 }
 
-function setHighWaterDay(day: string): void {
+function setHighWaterStart(start: number): void {
     try {
-        localStorage.setItem(`${STORAGE_KEY}.high-water`, day);
+        localStorage.setItem(`${STORAGE_KEY}.high-water`, String(start));
     } catch {
         // Ignore.
     }
 }
 
 export function loadDailyProgress(now: Date = new Date()): DailyProgress {
-    const today = dhakaDayString(now);
+    const timestamp = now.getTime();
     const stored = readStored();
+    const highWater = highWaterStart();
+
     if (!stored) {
-        const fresh = emptyProgress(today);
+        const fresh = emptyProgress(timestamp);
         persist(fresh);
-        setHighWaterDay(today);
+        setHighWaterStart(Math.max(highWater, fresh.cycleStart));
         return fresh;
     }
 
-    const highWater = highWaterDay();
-    if (stored.day > today) {
-        // Clock moved backwards: keep the stored (later) day so a previous
-        // day's rewards cannot be replayed.
-        setHighWaterDay(stored.day > highWater ? stored.day : highWater);
+    if (stored.cycleStart > timestamp) {
+        // Clock moved backwards: keep the later cycle so it cannot be replayed.
+        setHighWaterStart(Math.max(highWater, stored.cycleStart));
         return stored;
     }
 
-    if (stored.day !== today) {
-        const fresh = emptyProgress(today);
+    const elapsed = timestamp - stored.cycleStart;
+    if (elapsed >= DAILY_RESET_MS) {
+        // Advance in whole 24-hour steps so the cadence stays exact even if
+        // the game was closed for several days.
+        const cycles = Math.floor(elapsed / DAILY_RESET_MS);
+        const fresh = emptyProgress(stored.cycleStart + cycles * DAILY_RESET_MS);
         persist(fresh);
-        setHighWaterDay(today > highWater ? today : highWater);
+        setHighWaterStart(Math.max(highWater, fresh.cycleStart));
         return fresh;
     }
 
-    setHighWaterDay(today);
+    setHighWaterStart(Math.max(highWater, stored.cycleStart));
     return stored;
 }
 

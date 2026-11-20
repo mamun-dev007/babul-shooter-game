@@ -4,11 +4,13 @@ import {
     LEVEL_HUD_TOP_PADDING,
     mobileSideButtonLayout,
     mobileTopBarLayout,
+    SIDE_BUTTON_TOP_GAP,
+    starterDecorationLayout,
 } from './levelSectionLayout';
 
 const PHONE_SCALES = [1.3, 1.42, 1.55, 1.58] as const;
 /** A phone band multiplier combined with the 1.5x HUD enlargement. */
-const HUD_SCALES = PHONE_SCALES.map((scale) => scale * LEVEL_HUD_SCALE);
+const HUD_SCALES = [LEVEL_HUD_SCALE, ...PHONE_SCALES.map((scale) => scale * LEVEL_HUD_SCALE)];
 const WORLD_WIDTH = 540;
 const COLLECT_TOP = 69;
 
@@ -55,6 +57,33 @@ describe('Level Section HUD layout', () => {
                 side.radius + 41 * scale + 4
             );
         }
+    });
+
+    it('keeps the first side-button row clear of the scaled top bar', () => {
+        for (const scale of HUD_SCALES) {
+            const label = `hud scale ${scale}`;
+            const top = mobileTopBarLayout(scale);
+            const side = mobileSideButtonLayout(scale, WORLD_WIDTH);
+
+            expect(side.y1 - side.radius - (top.y + top.radius), label).toBeGreaterThanOrEqual(SIDE_BUTTON_TOP_GAP);
+            expect(side.y2 - side.y1, label).toBe(side.y3 - side.y2);
+        }
+    });
+
+    it('fits the Starter lock badge and label without moving any button', () => {
+        HUD_SCALES.forEach((scale) => {
+            const label = `hud scale ${scale}`;
+            const side = mobileSideButtonLayout(scale, WORLD_WIDTH);
+            const top = mobileTopBarLayout(scale);
+            const decoration = starterDecorationLayout(side, scale, 700);
+
+            // Badge clears the top bar and never covers the chest icon.
+            expect(decoration.lockY - decoration.lockRadius, label).toBeGreaterThanOrEqual(top.y + top.radius);
+            expect(decoration.lockY + decoration.lockRadius, label).toBeLessThan(side.y1 - Math.round(10 * scale));
+            // Label sits below the title and above the Gift disc.
+            expect(decoration.messageY, label).toBeGreaterThanOrEqual(side.y1 + Math.round(34 * scale));
+            expect(decoration.messageY + Math.round(12 * scale), label).toBeLessThan(side.y2 - side.radius);
+        });
     });
 
     it('grows the controls as the phone ladder grows', () => {

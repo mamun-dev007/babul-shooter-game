@@ -2,7 +2,7 @@ import type { Scene } from 'phaser';
 import { BUBBLE_DIAMETER, BUBBLE_RADIUS, GRID_COLS, GRID_TOP, setGameViewport } from './config';
 
 /**
- * Dynamic world size â€” the single source of truth for the live design
+ * Dynamic world size - the single source of truth for the live design
  * coordinates every scene anchors to.
  *
  * The game no longer letterboxes a fixed 700x960 canvas. Instead the world is
@@ -37,7 +37,7 @@ const BASELINE_BOTTOM_OFFSETS = {
     toolbar: 104,
     /** Power buttons' centres. */
     toolbarButton: 54,
-    /** Launcher origin — high enough for the enlarged silhouette to clear
+    /** Launcher origin - high enough for the enlarged silhouette to clear
      *  the toolbar and the power buttons at every viewport height. */
     shooter: 162,
     /** SHOTS card top edge (the card hangs beside the launcher). */
@@ -61,7 +61,7 @@ export const PROGRESS_HEIGHT = 9;
 /**
  * Vertical clearance from the launcher's origin to the barrel's top edge
  * (drawn as `-SHOOTER_TOP_CLEARANCE` in objects/Shooter). Here so the aim band
- * stays pure layout math — no Phaser runtime imports.
+ * stays pure layout math - no Phaser runtime imports.
  */
 export const SHOOTER_TOP_CLEARANCE = 92;
 
@@ -72,7 +72,7 @@ export const SHOOTER_TOP_CLEARANCE = 92;
  * these metrics, so proportions, shading and the spin animation are preserved
  * exactly. The silhouette is bottom-anchored above the toolbar: the
  * lowest launcher pixel (shadow / spinner ring) always stays inside the
- * visible viewport and clear of the bottom power-up buttons — asserted for
+ * visible viewport and clear of the bottom power-up buttons - asserted for
  * every supported viewport by responsiveLayout.test.ts.
  */
 export const LAUNCHER_SCALE = 1.39;
@@ -131,7 +131,7 @@ export const worldHeight = (): number => currentWorld.height;
  * pixels) to world coordinates.
  *
  * The world always keeps the exact available aspect so Phaser's Scale.FIT
- * fills the container edge-to-edge — no letterboxing. Portrait/taller screens
+ * fills the container edge-to-edge - no letterboxing. Portrait/taller screens
  * anchor the width at the design width (the 13 columns must fit) and let the
  * height follow the aspect; landscape / ultra-short screens anchor the height
  * at the minimum and let the width widen. Clamping either dimension on its
@@ -158,7 +158,7 @@ export const computeWorldSize = (availW: number, availH: number): WorldSize => {
 /**
  * The live area Phaser fits into: the container's own CSS box when it is laid
  * out, falling back to the visual viewport (then the window) during boot.
- * Measuring the container — not the window — keeps the world aspect aligned
+ * Measuring the container - not the window - keeps the world aspect aligned
  * with what Scale.FIT actually sees, including safe-area/browser chrome.
  */
 export const measureViewport = (): WorldSize => {
@@ -293,7 +293,7 @@ export const mapPlayY = (h = worldHeight()): number => h - 108;
  * Loading bar metrics in world coordinates. LoadingScene draws its canvas
  * bar from these numbers and the HTML boot splash mirrors them in CSS so
  * artwork + bar are visible together from the very first paint (before the
- * JS bundle boots) and the DOM→canvas hand-off is pixel-identical.
+ * JS bundle boots) and the DOM-canvas hand-off is pixel-identical.
  */
 export interface LoadingBarGeometry {
     /** Track top-left corner in world pixels. */
@@ -305,7 +305,7 @@ export interface LoadingBarGeometry {
     readonly height: number;
     /** Percent label font size in world pixels (rounded). */
     readonly percentFontSize: number;
-    /** Percent label centre — the label is drawn with origin 0.5. */
+    /** Percent label centre - the label is drawn with origin 0.5. */
     readonly percentX: number;
     readonly percentY: number;
 }

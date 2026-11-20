@@ -1,6 +1,6 @@
 import { FONT, FONT_DISPLAY } from '../game/config';
 import { gameAudio } from '../game/audio/GameAudio';
-import { acquireModalInputLock, releaseModalInputLock } from '../game/input/modalInputLock';
+import { acquireModalInputLock, releaseModalInputLock, suppressPointerRelease } from '../game/input/modalInputLock';
 import { attachRelayout, worldHeight, worldWidth } from '../game/layout';
 import { addPressFx } from './uiFx';
 
@@ -195,6 +195,7 @@ export class BackConfirmationPanel {
                 event: Phaser.Types.Input.EventData
             ) => {
                 event.stopPropagation();
+                suppressPointerRelease(_pointer.id);
                 gameAudio.playSfx('click');
                 onPress();
             }

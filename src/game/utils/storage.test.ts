@@ -188,4 +188,26 @@ describe('progress storage', () => {
         expect(progress.highestLevel).toBe(0);
         expect(progress.bestScore).toBe(0);
     });
+
+    it('unlocks Starter from persisted completions and keeps it unlocked after a restart', async () => {
+        installStorage();
+        const { isStarterUnlocked } = await import('../data/levels/progress');
+        const module = await loadStorageModule();
+
+        for (let index = 0; index < 19; index += 1) {
+            module.markLevelCompleted(index, 1);
+        }
+        expect(isStarterUnlocked(module.loadProgress())).toBe(false);
+
+        module.markLevelCompleted(19, 1);
+        expect(isStarterUnlocked(module.loadProgress())).toBe(true);
+
+        // Replaying an already-completed level never adds to the unique count.
+        module.markLevelCompleted(0, 3);
+        expect(module.loadProgress().completedLevels).toHaveLength(20);
+
+        // A fresh module read (app restart) still sees the unlock.
+        const restarted = await loadStorageModule();
+        expect(isStarterUnlocked(restarted.loadProgress())).toBe(true);
+    });
 });

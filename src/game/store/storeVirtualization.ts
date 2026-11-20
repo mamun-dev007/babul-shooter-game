@@ -39,11 +39,11 @@ export const STORE_CARD_GAP = 16;
 export const REWARDED_CARD_HEIGHT = 84;
 
 /**
- * Responsive column count, unchanged from the scene's original breakpoints:
- * 1 phone, 2 tablet/small laptop, 3 standard, 4 large desktop.
+ * Responsive column count. Phones always show exactly two product cards per
+ * row; tablet/iPad and desktop bands keep their original counts.
  */
 export function storeColumnsForWidth(width: number): number {
-    if (width < 560) return 1;
+    if (width < 560) return 2;
     if (width < 900) return 2;
     if (width < 1300) return 3;
     return 4;

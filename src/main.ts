@@ -15,7 +15,10 @@ import { gameAudio } from './game/audio/GameAudio';
 import { startAndroidBackNavigation } from './game/input/androidBack';
 // Registers the active rewarded-ad provider (Yandex Games SDK) at boot.
 import './ads/config';
+import { configureRealPayments } from './game/payments/config';
 import { syncHudAnchors } from './ui/hudAnchors';
+
+configureRealPayments();
 
 const initialViewport = measureViewport();
 const initialWorld = computeWorldSize(initialViewport.width, initialViewport.height);

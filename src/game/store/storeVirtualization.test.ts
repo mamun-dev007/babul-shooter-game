@@ -149,13 +149,35 @@ describe('build order', () => {
 });
 
 describe('device breakpoints', () => {
-    it('keeps the original responsive column counts', () => {
-        // Small / standard / large phones stay single column.
-        expect([320, 359, 360, 429, 430, 559].map(storeColumnsForWidth)).toEqual([1, 1, 1, 1, 1, 1]);
-        // Tablets and small laptops.
+    it('uses exactly two columns on every mobile width', () => {
+        expect([320, 360, 390, 430, 559].map(storeColumnsForWidth)).toEqual([2, 2, 2, 2, 2]);
+        // Tablet / iPad and desktop bands are unchanged.
         expect([560, 768, 899].map(storeColumnsForWidth)).toEqual([2, 2, 2]);
         expect([900, 1024, 1299].map(storeColumnsForWidth)).toEqual([3, 3, 3]);
         expect([1300, 1440, 2560].map(storeColumnsForWidth)).toEqual([4, 4, 4]);
+    });
+
+    it('fits two equal cards side by side inside the mobile grid', () => {
+        // Portrait world width 700 minus the scene's 39px side padding.
+        const gridWidth = 700 - 78;
+        const slots = buildStoreCardSlots({
+            category: 'all',
+            cols: storeColumnsForWidth(390),
+            gridWidth,
+            cardHeight: 194,
+            realProducts: catalog('real', 2),
+            coinProducts: catalog('coin', 6),
+        });
+        const cards = slots.filter((slot) => slot.kind !== 'rewarded');
+        const cardW = cards[0].w;
+
+        expect(cards[0].x).toBeCloseTo(cardW / 2, 3);
+        expect(cards[1].x).toBeCloseTo(gridWidth - cardW / 2, 3);
+        expect(cards[1].x - cards[0].x).toBeCloseTo(cardW + STORE_CARD_GAP, 3);
+        expect(cards.every((slot) => slot.w === cardW && slot.h === 194)).toBe(true);
+        expect(cards.every((slot) => slot.x >= slot.w / 2 && slot.x <= gridWidth - slot.w / 2)).toBe(true);
+        expect(slots[1].y).toBe(slots[2].y);
+        expect(slots[3].y).toBeGreaterThan(slots[1].y);
     });
 
     it('produces positive card sizes on every supported width', () => {

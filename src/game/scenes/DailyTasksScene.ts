@@ -5,13 +5,14 @@ import { gameAudio, installUiAudio } from '../audio/GameAudio';
 import { fadeInScene, goToSceneInstant } from './transitions';
 import { addPressFx } from '../../ui/uiFx';
 import { attachRelayout, worldHeight, worldWidth } from '../layout';
+import { clearPointerSuppression, isPointerReleaseSuppressed, suppressPointerRelease } from '../input/modalInputLock';
 import { hidesInGameBackButtonForViewport } from '../levelBreakpoints';
 import { dailyCardContentHeight, dailyCardLayout, type DailyCardLayout } from '../daily/dailyCardLayout';
 import {
     DAILY_MISSIONS,
     claimDailyReward,
     completedCount,
-    dhakaCountdownMs,
+    dailyResetCountdownMs,
     formatCountdown,
     loadDailyProgress,
     missionProgress,
@@ -46,7 +47,7 @@ export class DailyTasksScene extends Scene {
     private dragMoved = false;
     private dragStartY = 0;
     private dragStartScroll = 0;
-    private renderedDay = '';
+    private renderedCycleStart = 0;
     private countdownEvent: Phaser.Time.TimerEvent | null = null;
     private championCards: Phaser.GameObjects.Container[] = [];
 
@@ -164,8 +165,8 @@ export class DailyTasksScene extends Scene {
 
     private refreshSummary(): void {
         const state = loadDailyProgress();
-        this.renderedDay = state.day;
-        this.countdownText?.setText(`Resets in ${formatCountdown(dhakaCountdownMs())}`);
+        this.renderedCycleStart = state.cycleStart;
+        this.countdownText?.setText(`Resets in ${formatCountdown(dailyResetCountdownMs())}`);
         const done = completedCount(state);
         this.progressText?.setText(`${done}/${DAILY_MISSIONS.length} Completed`);
         if (this.progressFill) {
@@ -192,8 +193,8 @@ export class DailyTasksScene extends Scene {
         }
 
         const state = loadDailyProgress();
-        if (state.day !== this.renderedDay) {
-            // Dhaka day rolled over while this page was open.
+        if (state.cycleStart !== this.renderedCycleStart) {
+            // A new 24-hour cycle started while this page was open.
             this.buildList();
         }
         this.refreshSummary();
@@ -215,7 +216,7 @@ export class DailyTasksScene extends Scene {
         this.listContainer.setMask(this.listMaskShape.createGeometryMask());
 
         const state = loadDailyProgress();
-        this.renderedDay = state.day;
+        this.renderedCycleStart = state.cycleStart;
         this.championCards = [];
         DAILY_MISSIONS.forEach((mission, index) => {
             const x = layout.width / 2;
@@ -360,7 +361,8 @@ export class DailyTasksScene extends Scene {
             claimText.setName(`claim-${mission.id}`);
             const claimHit = this.add.rectangle(claimX, claimY, claimW, claimH, 0xffffff, 0.001).setInteractive({ useHandCursor: complete });
             claimHit.setData('claimMission', mission.id);
-            claimHit.on('pointerup', () => {
+            claimHit.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+                if (isPointerReleaseSuppressed(pointer.id)) return;
                 if (!this.dragMoved && complete) {
                     this.claimMission(mission.id);
                 }
@@ -416,6 +418,8 @@ export class DailyTasksScene extends Scene {
     }
 
     private bindScrollInput(): void {
+        this.input.on('pointerup', this.onAnyPointerUp, this);
+        this.input.on('pointerupoutside', this.onAnyPointerUp, this);
         this.input.on('pointerdown', this.onScrollDown, this);
         this.input.on('pointermove', this.onScrollMove, this);
         this.input.on('pointerup', this.onScrollUp, this);
@@ -427,6 +431,10 @@ export class DailyTasksScene extends Scene {
         const width = this.listWidth();
         const originX = worldWidth() / 2 - width / 2;
         return pointer.x >= originX && pointer.x <= originX + width && pointer.y >= SCROLL_TOP && pointer.y <= worldHeight();
+    }
+
+    private onAnyPointerUp(pointer: Phaser.Input.Pointer): void {
+        clearPointerSuppression(pointer.id);
     }
 
     private onScrollDown(pointer: Phaser.Input.Pointer): void {
@@ -496,7 +504,10 @@ export class DailyTasksScene extends Scene {
         const body = this.add.text(cardX, cardY - 10, bodyText, { fontFamily: FONT, fontSize: '16px', color: '#ffffff', stroke: '#0a3d91', strokeThickness: 2, align: 'center', lineSpacing: 6 }).setOrigin(0.5);
         const ok = this.add.text(cardX, cardY + 66, 'OK', { fontFamily: FONT_DISPLAY, fontSize: '18px', color: '#ffffff', backgroundColor: '#22c55e', padding: { x: 36, y: 10 } }).setOrigin(0.5).setInteractive({ useHandCursor: true });
         ok.setName('popup-ok');
-        const close = (): void => this.dismissPopup();
+        const close = (pointer: Phaser.Input.Pointer): void => {
+            suppressPointerRelease(pointer.id);
+            this.dismissPopup();
+        };
         ok.on('pointerdown', close);
         dim.on('pointerdown', close);
         addPressFx(this, ok, ok, { hoverScale: 1.05, pressScale: 0.95 });
