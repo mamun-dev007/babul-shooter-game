@@ -8,6 +8,7 @@ import { BackConfirmationPanel } from '../../ui/BackConfirmationPanel';
 import { exitAndroidApp } from '../input/androidBack';
 import { drawVectorIcon, type VectorIcon } from '../../ui/vectorIcons';
 import { attachRelayout, menuCoinX, menuPlayY, menuSettingsY, menuUtilityY } from '../layout';
+import { hideBannerAd, showBannerAd } from '../../services/admob';
 
 export class MenuScene extends Scene {
     private transitioning = false;
@@ -61,11 +62,13 @@ export class MenuScene extends Scene {
         });
         this.events.once('shutdown', this.handleShutdown, this);
         fadeInScene(this, 260, [0, 98, 154]);
+        void showBannerAd();
     }
 
     private handleShutdown(): void {
         this.exitGamePanel?.destroy();
         this.exitGamePanel = null;
+        void hideBannerAd();
     }
 
     private createBackground(): void {

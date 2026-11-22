@@ -13,7 +13,7 @@ import { GiftItemsScene } from './game/scenes/GiftItemsScene';
 import { GameScene } from './game/scenes/GameScene';
 import { gameAudio } from './game/audio/GameAudio';
 import { startAndroidBackNavigation } from './game/input/androidBack';
-// Registers the active rewarded-ad provider (Yandex Games SDK) at boot.
+// Registers the active rewarded-ad provider (AdMob on Android, Yandex on web) at boot.
 import './ads/config';
 import { configureRealPayments } from './game/payments/config';
 import { syncHudAnchors } from './ui/hudAnchors';

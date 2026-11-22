@@ -30,6 +30,7 @@ import { CHAIN_REACTION_MIN_BUBBLES, EFFICIENT_SHOT_LIMIT, recordDailyEvent } fr
 import { AimGuide } from '../../ui/AimGuide';
 import { SettingsPanel } from '../../ui/SettingsPanel';
 import { extraBallsRewardFor, showRewardedAd } from '../../ads/rewardedAds';
+import { hideBannerAd, recordLevelCompletedForInterstitial, showInterstitialAd } from '../../services/admob';
 import { gameAudio, installUiAudio } from '../audio/GameAudio';
 import { BoardScrollController } from '../input/BoardScrollController';
 import { isModalInputLocked, resetModalInputLock } from '../input/modalInputLock';
@@ -151,6 +152,7 @@ export class GameScene extends Scene {
         // themselves in the lock while they are visible.
         resetModalInputLock();
         clearTransition(this);
+        void hideBannerAd();
         installUiAudio(this);
         gameAudio.setMusicMode('gameplay');
         // Only the top-most interactive object (dim overlay, popup buttons)
@@ -1208,6 +1210,10 @@ export class GameScene extends Scene {
             },
             onSecondary: () => goToSceneInstant(this, 'LevelSelectionScene'),
         });
+
+        if (status === 'won' && !this.paused && recordLevelCompletedForInterstitial()) {
+            void showInterstitialAd();
+        }
     }
 
     /**

@@ -1,10 +1,19 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "compaction": {
-    "auto": true,
-    "keep": {
-      "tokens": 512
-    },
-    "buffer": 512
-  }
+  "provider": {
+    "magmarouter": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "MagmaRouter",
+      "options": {
+        "baseURL": "https://api.magmarouter.com/v1",
+          "apiKey": "{env:MAGMAROUTER_API_KEY}"
+      },
+      "models": {
+        "glm-5.3-xploded": {
+          "name": "Magma 1 Xploded"
+        }
+      }
+    }
+  },
+  "model": "magmarouter/glm-5.3-xploded"
 }
